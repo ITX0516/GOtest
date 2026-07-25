@@ -39,7 +39,7 @@ class EngineException(message: String, cause: Throwable? = null) : RuntimeExcept
  * 子类只需实现 [engineTypeCode]、[engineDisplayName]、[buildAnalyzeCommand]、
  * [parseAnalysisLine] 即可获得完整的引擎行为。
  */
-internal abstract class BaseNativeEngine(
+abstract class BaseNativeEngine(
     protected val config: EngineConfig
 ) : GoEngine {
 
