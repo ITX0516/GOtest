@@ -42,6 +42,11 @@ class ThemePreferences(private val context: Context) {
         prefs[KEY_SOUND_ENABLED] ?: true
     }
 
+    /** 是否显示坐标流。 */
+    val showCoordinates: Flow<Boolean> = store.data.map { prefs ->
+        prefs[KEY_SHOW_COORDINATES] ?: true
+    }
+
     /** 持久化棋盘主题。 */
     suspend fun setBoardTheme(theme: BoardTheme) {
         store.edit { it[KEY_BOARD_THEME] = theme.id }
@@ -57,9 +62,15 @@ class ThemePreferences(private val context: Context) {
         store.edit { it[KEY_SOUND_ENABLED] = enabled }
     }
 
+    /** 持久化坐标显示开关。 */
+    suspend fun setShowCoordinates(show: Boolean) {
+        store.edit { it[KEY_SHOW_COORDINATES] = show }
+    }
+
     companion object {
         private val KEY_BOARD_THEME = stringPreferencesKey("board_theme")
         private val KEY_STONE_THEME = stringPreferencesKey("stone_theme")
         private val KEY_SOUND_ENABLED = booleanPreferencesKey("sound_enabled")
+        private val KEY_SHOW_COORDINATES = booleanPreferencesKey("show_coordinates")
     }
 }
