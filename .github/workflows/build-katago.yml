@@ -1,0 +1,100 @@
+name: Build KataGo Android Binary
+
+on:
+  workflow_dispatch:
+    inputs:
+      katago_version:
+        description: 'KataGo version tag'
+        required: false
+        default: 'v1.16.4'
+        type: string
+      abi:
+        description: 'Target ABI'
+        required: false
+        default: 'arm64-v8a'
+        type: choice
+        options:
+          - arm64-v8a
+          - armeabi-v7a
+          - x86_64
+          - all
+      cpu_only:
+        description: 'CPU-only mode (Eigen backend)'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  ANDROID_NDK_VERSION: '26.3.11579264'
+  CMAKE_VERSION: '3.22.1'
+
+jobs:
+  build-katago:
+    name: Build KataGo (${{ matrix.abi }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: ${{ inputs.abi == 'all' && fromJSON('["arm64-v8a","armeabi-v7a","x86_64"]') || (inputs.abi && fromJSON(format('["{0}"]', inputs.abi)) || fromJSON('["arm64-v8a"]')) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Setup Android NDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+          packages: >
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+            cmake;${{ env.CMAKE_VERSION }}
+
+      - name: Set ANDROID_NDK_HOME
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build zip unzip
+
+      - name: Build KataGo
+        run: |
+          chmod +x ./tools/build_katago_android.sh
+          CPU_FLAG="--cpu-only"
+          if [ "${{ inputs.cpu_only }}" != "true" ]; then
+            CPU_FLAG="--gpu"
+          fi
+          ./tools/build_katago_android.sh \
+            --abi ${{ matrix.abi }} \
+            --branch ${{ inputs.katago_version }} \
+            --ndk $ANDROID_NDK_HOME \
+            $CPU_FLAG \
+            --build-dir ./build/katago-${{ matrix.abi }} \
+            --output-dir ./output/katago/${{ matrix.abi }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify build output
+        run: |
+          OUTPUT_DIR="./output/katago/${{ matrix.abi }}"
+          if [ -f "$OUTPUT_DIR/katago" ]; then
+            echo "✓ katago binary found"
+            ls -lh "$OUTPUT_DIR/katago"
+            file "$OUTPUT_DIR/katago" || true
+          else
+            echo "✗ katago binary NOT found"
+            ls -la "$OUTPUT_DIR" || true
+            exit 1
+          fi
+
+      - name: Upload KataGo binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: katago-${{ matrix.abi }}-${{ inputs.katago_version }}
+          path: output/katago/${{ matrix.abi }}/
+          retention-days: 90

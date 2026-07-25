@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    占位音频资源：提子声。
+    用法：替换为真实的 capture.wav 音频文件（删除本 XML，放入同名 .wav）。
+    SoundManager 加载失败时静默跳过，故此占位不影响编译与运行。
+-->
+<resources>
+    <placeholder name="capture" type="audio" />
+</resources>

@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag name'
+        required: true
+        type: string
+
+env:
+  JAVA_VERSION: '17'
+  ANDROID_COMPILE_SDK: '34'
+  ANDROID_BUILD_TOOLS: '34.0.0'
+  ANDROID_NDK_VERSION: '26.3.11579264'
+  CMAKE_VERSION: '3.22.1'
+
+jobs:
+  build-release:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+          packages: >
+            platforms;android-${{ env.ANDROID_COMPILE_SDK }}
+            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+            cmake;${{ env.CMAKE_VERSION }}
+
+      - name: Set ANDROID_NDK_HOME
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Download KataGo source (BUILTIN mode)
+        run: |
+          chmod +x ./tools/download_katago_source.sh
+          ./tools/download_katago_source.sh --branch v1.16.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download weights (b18)
+        run: |
+          chmod +x ./tools/download_weights.sh
+          ./tools/download_weights.sh --size b18
+
+      - name: Set BUILTIN engine mode
+        run: |
+          sed -i "s/-DWEIQI_ENGINE_MODE=[A-Z]*/-DWEIQI_ENGINE_MODE=BUILTIN/" app/build.gradle.kts
+          grep "WEIQI_ENGINE_MODE" app/build.gradle.kts
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace --no-daemon
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+
+      - name: Sign APK
+        id: sign_apk
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
+          alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        continue-on-error: true
+
+      - name: Get version name
+        id: get_version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag"]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+          else
+            VERSION="${{ inputs.tag_name }}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/*.aab
+          body: |
+            ## 围棋 AI App v${{ steps.get_version.outputs.version }}
+
+            ### 特性
+            - KataGo 引擎内置（BUILTIN 模式，b18c384nbt 权重）
+            - 业余 5-6 段棋力
+            - 对弈模式 + 分析模式
+            - SGF 导入导出
+            - 远程算力支持
+            - 多种棋盘棋子主题
+
+            ### 引擎配置
+            - 引擎模式: BUILTIN
+            - KataGo 版本: v1.16.4
+            - 权重: b18c384nbt
+            - CPU-only 模式
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

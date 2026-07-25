@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">阿Q围棋</string>
+    <string name="play_mode">对弈</string>
+    <string name="analysis_mode">分析</string>
+    <string name="settings">设置</string>
+    <string name="import_sgf">导入SGF</string>
+    <string name="export_sgf">导出SGF</string>
+    <string name="engine_katago">KataGo</string>
+    <string name="engine_leelazero">LeelaZero</string>
+    <string name="engine_remote">远程计算</string>
+    <string name="resign">认输</string>
+    <string name="undo">悔棋</string>
+    <string name="pass">虚手</string>
+    <string name="new_game">新对局</string>
+    <string name="hint">提示</string>
+    <string name="analyze">分析</string>
+    <string name="stone_input_single">单击落子</string>
+    <string name="stone_input_double">双击落子</string>
+    <string name="stone_input_confirm">确认按钮</string>
+</resources>

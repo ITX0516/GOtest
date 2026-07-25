@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="board_classic">#E8B964</color>
+    <color name="board_paper">#D9C28A</color>
+    <color name="stone_black">#1A1A1A</color>
+    <color name="stone_white">#FAFAFA</color>
+    <color name="line_black">#3A2E1C</color>
+    <color name="md_theme_primary">#6750A4</color>
+    <color name="md_theme_on_primary">#FFFFFF</color>
+    <color name="md_theme_background">#FFFBFE</color>
+</resources>

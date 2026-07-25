@@ -1,0 +1,151 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'app/**'
+      - 'tools/**'
+      - '.github/workflows/build-apk.yml'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      engine_mode:
+        description: 'Engine integration mode'
+        required: false
+        default: 'BUILTIN'
+        type: choice
+        options:
+          - BUILTIN
+          - PROCESS
+          - STUB
+          - DYLIB
+      weight_size:
+        description: 'KataGo weight size'
+        required: false
+        default: 'b18'
+        type: choice
+        options:
+          - b10
+          - b18
+          - b28
+          - none
+      build_type:
+        description: 'Build type'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+env:
+  JAVA_VERSION: '17'
+  ANDROID_COMPILE_SDK: '34'
+  ANDROID_BUILD_TOOLS: '34.0.0'
+  ANDROID_NDK_VERSION: '26.3.11579264'
+  CMAKE_VERSION: '3.22.1'
+
+jobs:
+  build-apk:
+    name: Build APK (${{ inputs.engine_mode || 'BUILTIN' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+          packages: >
+            platforms;android-${{ env.ANDROID_COMPILE_SDK }}
+            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
+            ndk;${{ env.ANDROID_NDK_VERSION }}
+            cmake;${{ env.CMAKE_VERSION }}
+
+      - name: Set ANDROID_NDK_HOME
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+
+      - name: Download KataGo source (BUILTIN mode)
+        if: ${{ inputs.engine_mode == 'BUILTIN' || inputs.engine_mode == '' }}
+        run: |
+          chmod +x ./tools/download_katago_source.sh
+          ./tools/download_katago_source.sh --branch v1.16.4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download weights
+        if: ${{ inputs.weight_size != 'none' }}
+        run: |
+          chmod +x ./tools/download_weights.sh
+          ./tools/download_weights.sh --size ${{ inputs.weight_size || 'b18' }}
+
+      - name: Set engine mode in build.gradle.kts
+        run: |
+          ENGINE_MODE="${{ inputs.engine_mode || 'BUILTIN' }}"
+          echo "Setting WEIQI_ENGINE_MODE=$ENGINE_MODE"
+          # 用 sed 替换 build.gradle.kts 中的模式
+          sed -i "s/-DWEIQI_ENGINE_MODE=[A-Z]*/-DWEIQI_ENGINE_MODE=$ENGINE_MODE/" app/build.gradle.kts
+          grep "WEIQI_ENGINE_MODE" app/build.gradle.kts
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build APK (${{ inputs.build_type || 'release' }})
+        run: |
+          BUILD_TYPE="${{ inputs.build_type || 'release' }}"
+          if [ "$BUILD_TYPE" = "release" ]; then
+            ./gradlew assembleRelease --stacktrace --no-daemon
+          else
+            ./gradlew assembleDebug --stacktrace --no-daemon
+          fi
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+
+      - name: Sign APK (release)
+        if: ${{ inputs.build_type == 'release' || inputs.build_type == '' }}
+        uses: r0adkll/sign-android-release@v1
+        id: sign_apk
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
+          alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        continue-on-error: true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weiqi-app-${{ inputs.engine_mode || 'BUILTIN' }}-${{ inputs.build_type || 'release' }}
+          path: |
+            app/build/outputs/apk/**/*.apk
+          retention-days: 30
+
+      - name: Upload build reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            app/build/reports/
+            app/build/outputs/
+          retention-days: 7
