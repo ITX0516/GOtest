@@ -18,6 +18,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -124,8 +125,19 @@ class AnalysisViewModel(
     private var autoAnalyzeJob: Job? = null
 
     init {
-        // 从主题偏好加载初始主题（具体 API 以 ThemePreferences 实现为准）
-        loadThemeFromPreferences()
+        // 从主题偏好加载初始主题
+        viewModelScope.launch {
+            val boardTheme = themePreferences.boardTheme.first()
+            val stoneTheme = themePreferences.stoneTheme.first()
+            val showCoords = themePreferences.showCoordinates.first()
+            _themeState.update { current ->
+                current.copy(
+                    boardTheme = boardTheme,
+                    stoneTheme = stoneTheme,
+                    showCoordinates = showCoords
+                )
+            }
+        }
 
         // 恢复已保存的 currentIndex
         savedStateHandle.get<Int>(KEY_CURRENT_INDEX)?.let { idx ->
@@ -384,16 +396,7 @@ class AnalysisViewModel(
         return engineManager.startEngine()
     }
 
-    /** 从 [themePreferences] 读取初始主题设置。 */
-    private fun loadThemeFromPreferences() {
-        _themeState.update { current ->
-            current.copy(
-                boardTheme = themePreferences.boardTheme,
-                stoneTheme = themePreferences.stoneTheme,
-                showCoordinates = themePreferences.showCoordinates
-            )
-        }
-    }
+
 
     override fun onCleared() {
         super.onCleared()
