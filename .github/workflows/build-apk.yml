@@ -78,11 +78,16 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           cmdline-tools-version: 11076708
-          packages: |
-            platforms;android-${{ env.ANDROID_COMPILE_SDK }}
-            build-tools;${{ env.ANDROID_BUILD_TOOLS }}
-            ndk;${{ env.ANDROID_NDK_VERSION }}
-            cmake;${{ env.CMAKE_VERSION }}
+
+      - name: Install required SDK packages
+        run: |
+          # 手动安装所需的 SDK 包，避免 packages 参数格式问题
+          sdkmanager "platforms;android-${{ env.ANDROID_COMPILE_SDK }}" || true
+          sdkmanager "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" || true
+          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}" || true
+          sdkmanager "cmake;${{ env.CMAKE_VERSION }}" || true
+          # 打印已安装的包
+          sdkmanager --list_installed 2>/dev/null || sdkmanager --list 2>/dev/null | head -30
 
       - name: Set ANDROID_NDK_HOME
         run: |
@@ -95,7 +100,6 @@ jobs:
           if [ -d "app/src/main/cpp/third_party/katago/cpp" ]; then
             echo "KataGo source already exists, skipping download."
           else
-            # Use non-interactive mode: pipe yes to skip prompts
             yes "" | ./tools/download_katago_source.sh --branch v1.16.4
           fi
         env:
@@ -107,14 +111,12 @@ jobs:
           KATAGO_DIR="app/src/main/cpp/third_party/katago"
           EIGEN_DIR="$KATAGO_DIR/cpp/external/eigen"
           
-          # Check if Eigen is available (might be submodule)
           if [ -d "$KATAGO_DIR/.git" ] || [ -f "$KATAGO_DIR/.git" ]; then
             cd "$KATAGO_DIR"
             git submodule update --init --recursive 2>/dev/null || true
             cd -
           fi
           
-          # If Eigen still missing, download it
           if [ ! -f "$EIGEN_DIR/Eigen/Core" ]; then
             echo "Eigen not found, downloading..."
             mkdir -p "$EIGEN_DIR"
