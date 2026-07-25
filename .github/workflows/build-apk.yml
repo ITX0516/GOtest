@@ -16,17 +16,17 @@ on:
       engine_mode:
         description: 'Engine integration mode'
         required: false
-        default: 'BUILTIN'
+        default: 'STUB'
         type: choice
         options:
+          - STUB
           - BUILTIN
           - PROCESS
-          - STUB
           - DYLIB
       weight_size:
         description: 'KataGo weight size'
         required: false
-        default: 'b18'
+        default: 'none'
         type: choice
         options:
           - b10
@@ -36,11 +36,11 @@ on:
       build_type:
         description: 'Build type'
         required: false
-        default: 'release'
+        default: 'debug'
         type: choice
         options:
-          - release
           - debug
+          - release
 
 env:
   JAVA_VERSION: '17'
@@ -51,7 +51,7 @@ env:
 
 jobs:
   build-apk:
-    name: Build APK (${{ inputs.engine_mode || 'BUILTIN' }})
+    name: Build APK (${{ inputs.engine_mode || 'STUB' }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -78,7 +78,7 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           cmdline-tools-version: 11076708
-          packages: >
+          packages: |
             platforms;android-${{ env.ANDROID_COMPILE_SDK }}
             build-tools;${{ env.ANDROID_BUILD_TOOLS }}
             ndk;${{ env.ANDROID_NDK_VERSION }}
@@ -89,33 +89,69 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
 
       - name: Download KataGo source (BUILTIN mode)
-        if: ${{ inputs.engine_mode == 'BUILTIN' || inputs.engine_mode == '' }}
+        if: ${{ inputs.engine_mode == 'BUILTIN' }}
         run: |
           chmod +x ./tools/download_katago_source.sh
-          ./tools/download_katago_source.sh --branch v1.16.4
+          if [ -d "app/src/main/cpp/third_party/katago/cpp" ]; then
+            echo "KataGo source already exists, skipping download."
+          else
+            # Use non-interactive mode: pipe yes to skip prompts
+            yes "" | ./tools/download_katago_source.sh --branch v1.16.4
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Ensure Eigen headers (BUILTIN mode)
+        if: ${{ inputs.engine_mode == 'BUILTIN' }}
+        run: |
+          KATAGO_DIR="app/src/main/cpp/third_party/katago"
+          EIGEN_DIR="$KATAGO_DIR/cpp/external/eigen"
+          
+          # Check if Eigen is available (might be submodule)
+          if [ -d "$KATAGO_DIR/.git" ] || [ -f "$KATAGO_DIR/.git" ]; then
+            cd "$KATAGO_DIR"
+            git submodule update --init --recursive 2>/dev/null || true
+            cd -
+          fi
+          
+          # If Eigen still missing, download it
+          if [ ! -f "$EIGEN_DIR/Eigen/Core" ]; then
+            echo "Eigen not found, downloading..."
+            mkdir -p "$EIGEN_DIR"
+            curl -sL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz | \
+              tar xz -C "$EIGEN_DIR" --strip-components=1
+            echo "Eigen downloaded to $EIGEN_DIR"
+          else
+            echo "Eigen headers found at $EIGEN_DIR"
+          fi
+
       - name: Download weights
-        if: ${{ inputs.weight_size != 'none' }}
+        if: ${{ inputs.weight_size != 'none' && inputs.engine_mode != 'STUB' }}
         run: |
           chmod +x ./tools/download_weights.sh
           ./tools/download_weights.sh --size ${{ inputs.weight_size || 'b18' }}
 
       - name: Set engine mode in build.gradle.kts
         run: |
-          ENGINE_MODE="${{ inputs.engine_mode || 'BUILTIN' }}"
+          ENGINE_MODE="${{ inputs.engine_mode || 'STUB' }}"
           echo "Setting WEIQI_ENGINE_MODE=$ENGINE_MODE"
-          # 用 sed 替换 build.gradle.kts 中的模式
           sed -i "s/-DWEIQI_ENGINE_MODE=[A-Z]*/-DWEIQI_ENGINE_MODE=$ENGINE_MODE/" app/build.gradle.kts
+          echo "After sed:"
           grep "WEIQI_ENGINE_MODE" app/build.gradle.kts
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew 2>/dev/null || true
-
-      - name: Build APK (${{ inputs.build_type || 'release' }})
+      - name: Generate gradlew if missing
         run: |
-          BUILD_TYPE="${{ inputs.build_type || 'release' }}"
+          if [ ! -f gradlew ]; then
+            echo "gradlew not found, generating..."
+            gradle wrapper --gradle-version 8.7
+          fi
+          chmod +x gradlew
+          ls -la gradlew
+
+      - name: Build APK (${{ inputs.build_type || 'debug' }})
+        run: |
+          BUILD_TYPE="${{ inputs.build_type || 'debug' }}"
+          echo "Building $BUILD_TYPE ..."
           if [ "$BUILD_TYPE" = "release" ]; then
             gradle assembleRelease --stacktrace --no-daemon
           else
@@ -126,7 +162,7 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
       - name: Sign APK (release)
-        if: ${{ inputs.build_type == 'release' || inputs.build_type == '' }}
+        if: ${{ inputs.build_type == 'release' }}
         uses: r0adkll/sign-android-release@v1
         id: sign_apk
         with:
@@ -140,7 +176,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: weiqi-app-${{ inputs.engine_mode || 'BUILTIN' }}-${{ inputs.build_type || 'release' }}
+          name: weiqi-app-${{ inputs.engine_mode || 'STUB' }}-${{ inputs.build_type || 'debug' }}
           path: |
             app/build/outputs/apk/**/*.apk
           retention-days: 30
