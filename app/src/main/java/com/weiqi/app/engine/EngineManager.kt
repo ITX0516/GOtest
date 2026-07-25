@@ -258,16 +258,19 @@ class EngineManager(
         private const val MIN_REQUIRED_MEMORY_BYTES = 1L * 1024 * 1024 * 1024
 
         /** 探测 native 端某引擎类型是否已链接（不依赖 EnginePreferences）。 */
-        fun isNativeEngineAvailable(engineType: EngineType): Boolean = try {
-            NativeEngineBridge.isEngineAvailable(
-                when (engineType) {
-                    EngineType.KATAGO -> NativeEngineBridge.ENGINE_KATAGO
-                    EngineType.LEELAZERO -> NativeEngineBridge.ENGINE_LEELAZERO
-                    EngineType.REMOTE -> return false
-                }
-            )
-        } catch (_: Throwable) {
-            false
+        fun isNativeEngineAvailable(engineType: EngineType): Boolean {
+            if (engineType == EngineType.REMOTE) return false
+            return try {
+                NativeEngineBridge.isEngineAvailable(
+                    when (engineType) {
+                        EngineType.KATAGO -> NativeEngineBridge.ENGINE_KATAGO
+                        EngineType.LEELAZERO -> NativeEngineBridge.ENGINE_LEELAZERO
+                        else -> return false
+                    }
+                )
+            } catch (_: Throwable) {
+                false
+            }
         }
     }
 }
