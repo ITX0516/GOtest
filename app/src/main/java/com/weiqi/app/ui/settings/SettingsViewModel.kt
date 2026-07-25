@@ -91,7 +91,7 @@ class SettingsViewModel(
 
     fun updateLeelaConfig(config: EngineConfig) {
         require(config.type == EngineType.LEELAZERO)
-        enginePreferences.setLeelaConfig(config)
+        enginePreferences.setLeelaZeroConfig(config)
         _settingsState.value = _settingsState.value.copy(leelaConfig = config)
     }
 
