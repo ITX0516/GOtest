@@ -141,6 +141,18 @@ class SettingsViewModel(
     fun clearError() {
         _settingsState.value = _settingsState.value.copy(lastError = null)
     }
+
+    /** 获取当前权重目录（外部存储，无 root 也能访问）。 */
+    fun getWeightsDir(): java.io.File? = runCatching { enginePreferences.getWeightsDir() }.getOrNull()
+
+    /** 展示一条提示信息（由 LaunchedEffect 读取后清除）。 */
+    fun showInfo(message: String) {
+        _settingsState.value = _settingsState.value.copy(infoMessage = message)
+    }
+
+    fun clearInfo() {
+        _settingsState.value = _settingsState.value.copy(infoMessage = null)
+    }
 }
 
 data class SettingsUiState(
@@ -152,5 +164,6 @@ data class SettingsUiState(
     val stoneTheme: StoneTheme,
     val soundEnabled: Boolean,
     val engineRunning: Boolean,
-    val lastError: String? = null
+    val lastError: String? = null,
+    val infoMessage: String? = null
 )

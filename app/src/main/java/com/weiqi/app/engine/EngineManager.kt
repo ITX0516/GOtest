@@ -82,44 +82,56 @@ class EngineManager(
 
     /**
      * 从 assets 复制权重文件到外部存储 `Android/data/<pkg>/files/weights/`。
-     * 若用户已在该目录放置了同名权重文件（无 root 也能通过文件管理器操作），
-     * 则优先使用用户的文件，不覆盖。
+     * 查找顺序：
+     *  1. 标准文件名（如 `katago_b18c384.bin.gz`）→ 直接用（用户手动放或 app 抽出）
+     *  2. 通配符匹配：目录下任意 `*.bin.gz`（KataGo）/ `*.txt.gz`（LeelaZero），
+     *     取最近修改的一个（适用于设置里“自定义权重”导入的文件）
+     *  3. assets 抽出（首次启动 / 用户未自行放置）
      *
      * @param engineType 引擎类型（KATAGO / LEELAZERO）。
      * @return 目标权重文件绝对路径。
      */
     suspend fun ensureWeightsExtracted(engineType: EngineType): String = withContext(Dispatchers.IO) {
-        val assetName = when (engineType) {
-            EngineType.KATAGO -> EnginePreferences.ASSET_KATAGO_WEIGHTS
-            EngineType.LEELAZERO -> EnginePreferences.ASSET_LEELA_WEIGHTS
+        val (assetName, suffix) = when (engineType) {
+            EngineType.KATAGO -> EnginePreferences.ASSET_KATAGO_WEIGHTS to ".bin.gz"
+            EngineType.LEELAZERO -> EnginePreferences.ASSET_LEELA_WEIGHTS to ".txt.gz"
             EngineType.REMOTE -> return@withContext ""
         }
-        val fileName = assetName.substringAfterLast('/')
+        val standardName = assetName.substringAfterLast('/')
         val destDir = preferences.getWeightsDir()
         if (!destDir.exists()) destDir.mkdirs()
-        val destFile = File(destDir, fileName)
+        val standardFile = File(destDir, standardName)
         val isExternalDir = destDir.absolutePath.contains("/Android/data/")
 
-        // 外部存储中已有用户文件（≥1KB），直接复用，不覆盖
-        if (isExternalDir && destFile.exists() && destFile.length() > 1024L) {
-            return@withContext destFile.absolutePath
+        // 1. 标准文件名（外部存储）→ 直接用
+        if (isExternalDir && standardFile.exists() && standardFile.length() > 1024L) {
+            return@withContext standardFile.absolutePath
         }
 
-        // 否则从 assets 解压（首次启动 / 用户未自行放置）
-        if (!destFile.exists() || destFile.length() == 0L) {
+        // 2. 通配符：扫目录下任意 *.<suffix>（用户通过设置页面自定义导入的文件）
+        val customFile = destDir.listFiles { f ->
+            f.isFile && f.name.endsWith(suffix, ignoreCase = true) && f.length() > 1024L
+        }?.maxByOrNull { it.lastModified() }
+        if (customFile != null) {
+            return@withContext customFile.absolutePath
+        }
+
+        // 3. 从 assets 解压（首次启动 / 用户未自行放置）
+        if (!standardFile.exists() || standardFile.length() == 0L) {
             try {
                 appContext.assets.open(assetName).use { input ->
-                    destFile.outputStream().use { output -> input.copyTo(output) }
+                    standardFile.outputStream().use { output -> input.copyTo(output) }
                 }
             } catch (e: IOException) {
                 throw EngineException(
                     "权重文件未找到：assets/$assetName。" +
-                        "请将 ${engineType.displayName} 权重 (${fileName}) 放到 ${destDir.absolutePath}/ 目录下。",
+                        "请将 ${engineType.displayName} 权重 (后缀 ${suffix}) 放到 ${destDir.absolutePath}/ 目录下，" +
+                        "或在设置中使用“自定义权重”按钮选择文件。",
                     e
                 )
             }
         }
-        destFile.absolutePath
+        standardFile.absolutePath
     }
 
     /**

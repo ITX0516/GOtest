@@ -59,10 +59,22 @@ fun SettingsScreen(
     val supported by viewModel.deviceSupported.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // 供子组件使用的 onWeightsPicked 回调：弹出 “已导入” 提示
+    val onWeightsPickedLocal: (java.io.File) -> Unit = { file ->
+        viewModel.showInfo("已导入权重：${file.name}，重启引擎后生效")
+    }
+
     LaunchedEffect(state.lastError) {
         state.lastError?.let {
             snackbarHostState.showSnackbar(it)
             viewModel.clearError()
+        }
+    }
+
+    LaunchedEffect(state.infoMessage) {
+        state.infoMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearInfo()
         }
     }
 
@@ -100,11 +112,15 @@ fun SettingsScreen(
             when (state.currentEngine) {
                 EngineType.KATAGO -> KataGoConfigSection(
                     config = state.katagoConfig,
-                    onUpdate = viewModel::updateKataGoConfig
+                    onUpdate = viewModel::updateKataGoConfig,
+                    weightsDirProvider = viewModel::getWeightsDir,
+                    onWeightsPicked = onWeightsPickedLocal
                 )
                 EngineType.LEELAZERO -> LeelaConfigSection(
                     config = state.leelaConfig,
-                    onUpdate = viewModel::updateLeelaConfig
+                    onUpdate = viewModel::updateLeelaConfig,
+                    weightsDirProvider = viewModel::getWeightsDir,
+                    onWeightsPicked = onWeightsPickedLocal
                 )
                 EngineType.REMOTE -> RemoteConfigSection(
                     config = state.remoteConfig,
@@ -182,7 +198,9 @@ private fun EngineSection(
 @Composable
 private fun KataGoConfigSection(
     config: EngineConfig,
-    onUpdate: (EngineConfig) -> Unit
+    onUpdate: (EngineConfig) -> Unit,
+    weightsDirProvider: () -> java.io.File?,
+    onWeightsPicked: (java.io.File) -> Unit
 ) {
     ConfigCard("KataGo 参数") {
         NumberField(
@@ -205,13 +223,21 @@ private fun KataGoConfigSection(
             checked = config.enablePonder,
             onChange = { onUpdate(config.copy(enablePonder = it)) }
         )
+        Spacer(Modifier.height(8.dp))
+        WeightsFilePickerCard(
+            engineType = EngineType.KATAGO,
+            weightsDirProvider = weightsDirProvider,
+            onPicked = { file -> onWeightsPicked(file) }
+        )
     }
 }
 
 @Composable
 private fun LeelaConfigSection(
     config: EngineConfig,
-    onUpdate: (EngineConfig) -> Unit
+    onUpdate: (EngineConfig) -> Unit,
+    weightsDirProvider: () -> java.io.File?,
+    onWeightsPicked: (java.io.File) -> Unit
 ) {
     ConfigCard("LeelaZero 参数") {
         NumberField(
@@ -228,6 +254,12 @@ private fun LeelaConfigSection(
             label = "仅 CPU 模式",
             checked = config.cpuOnly,
             onChange = { onUpdate(config.copy(cpuOnly = it)) }
+        )
+        Spacer(Modifier.height(8.dp))
+        WeightsFilePickerCard(
+            engineType = EngineType.LEELAZERO,
+            weightsDirProvider = weightsDirProvider,
+            onPicked = { file -> onWeightsPicked(file) }
         )
     }
 }
