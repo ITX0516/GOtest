@@ -107,7 +107,8 @@ jobs:
         run: |
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
           KATAGO_SRC="app/src/main/cpp/third_party/katago/cpp"
-          export CXXFLAGS="-DBYTE_ORDER=LITTLE_ENDIAN"
+          # NDK doesn't define BYTE_ORDER, patch the source
+          sed -i '1i #define BYTE_ORDER 1234\n#define LITTLE_ENDIAN 1234' "$KATAGO_SRC/core/sha2.cpp"
           for ABI in arm64-v8a armeabi-v7a; do
             echo "=== Building katago for $ABI ==="
             mkdir -p build-katago/$ABI
