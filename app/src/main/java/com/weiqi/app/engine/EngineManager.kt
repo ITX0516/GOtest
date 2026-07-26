@@ -81,7 +81,10 @@ class EngineManager(
     }
 
     /**
-     * 从 assets 复制权重文件到 `filesDir/weights/`，已存在则跳过。
+     * 从 assets 复制权重文件到外部存储 `Android/data/<pkg>/files/weights/`。
+     * 若用户已在该目录放置了同名权重文件（无 root 也能通过文件管理器操作），
+     * 则优先使用用户的文件，不覆盖。
+     *
      * @param engineType 引擎类型（KATAGO / LEELAZERO）。
      * @return 目标权重文件绝对路径。
      */
@@ -91,10 +94,18 @@ class EngineManager(
             EngineType.LEELAZERO -> EnginePreferences.ASSET_LEELA_WEIGHTS
             EngineType.REMOTE -> return@withContext ""
         }
+        val fileName = assetName.substringAfterLast('/')
         val destDir = preferences.getWeightsDir()
         if (!destDir.exists()) destDir.mkdirs()
-        val destFile = File(destDir, assetName.substringAfterLast('/'))
+        val destFile = File(destDir, fileName)
+        val isExternalDir = destDir.absolutePath.contains("/Android/data/")
 
+        // 外部存储中已有用户文件（≥1KB），直接复用，不覆盖
+        if (isExternalDir && destFile.exists() && destFile.length() > 1024L) {
+            return@withContext destFile.absolutePath
+        }
+
+        // 否则从 assets 解压（首次启动 / 用户未自行放置）
         if (!destFile.exists() || destFile.length() == 0L) {
             try {
                 appContext.assets.open(assetName).use { input ->
@@ -103,7 +114,7 @@ class EngineManager(
             } catch (e: IOException) {
                 throw EngineException(
                     "权重文件未找到：assets/$assetName。" +
-                        "请下载 ${engineType.displayName} 权重并放到 app/src/main/assets/weights/ 下。",
+                        "请将 ${engineType.displayName} 权重 (${fileName}) 放到 ${destDir.absolutePath}/ 目录下。",
                     e
                 )
             }
@@ -112,7 +123,8 @@ class EngineManager(
     }
 
     /**
-     * 从 assets 复制引擎可执行文件到 `filesDir/bin/`，已存在则跳过，并设置可执行权限。
+     * 从 assets 复制引擎可执行文件到外部存储 `Android/data/<pkg>/files/bin/`，
+     * 已存在则跳过，并设置可执行权限。
      * PROCESS 模式（子进程方式）需要引擎可执行文件（katago / leelaz）。
      *
      * @param engineType 引擎类型（KATAGO / LEELAZERO）。
@@ -124,7 +136,8 @@ class EngineManager(
             EngineType.LEELAZERO -> EnginePreferences.ASSET_LEELA_BINARY to "leelaz"
             EngineType.REMOTE -> return@withContext ""
         }
-        val destDir = File(appContext.filesDir, "bin")
+        val destDir = appContext.getExternalFilesDir("bin")
+            ?: File(appContext.filesDir, "bin")
         if (!destDir.exists()) destDir.mkdirs()
         val destFile = File(destDir, binaryName)
 
@@ -150,7 +163,8 @@ class EngineManager(
     }
 
     /**
-     * 从 assets 复制引擎配置文件到 `filesDir/config/`，已存在则跳过。
+     * 从 assets 复制引擎配置文件到外部存储 `Android/data/<pkg>/files/config/`，
+     * 已存在则跳过。
      * KataGo 支持可选的 .cfg 配置文件。
      *
      * @param assetName 配置文件在 assets 中的路径。
@@ -158,7 +172,8 @@ class EngineManager(
      */
     suspend fun ensureConfigExtracted(assetName: String): String = withContext(Dispatchers.IO) {
         if (assetName.isBlank()) return@withContext ""
-        val destDir = File(appContext.filesDir, "config")
+        val destDir = appContext.getExternalFilesDir("config")
+            ?: File(appContext.filesDir, "config")
         if (!destDir.exists()) destDir.mkdirs()
         val destFile = File(destDir, assetName.substringAfterLast('/'))
 
@@ -207,7 +222,8 @@ class EngineManager(
                 val weights = try { ensureWeightsExtracted(type) } catch (e: EngineException) { "" }
                 val binaryPath = try { ensureBinaryExtracted(type) } catch (e: EngineException) { "" }
                 val configPath = try { ensureConfigExtracted(EnginePreferences.ASSET_KATAGO_CONFIG) } catch (_: Exception) { "" }
-                val workingDir = File(appContext.filesDir, "bin").absolutePath
+                val workingDir = (appContext.getExternalFilesDir("bin")
+                    ?: File(appContext.filesDir, "bin")).absolutePath
                 val cfg = preferences.getKataGoConfig().copy(
                     weightsPath = weights,
                     executablePath = binaryPath,
@@ -219,7 +235,8 @@ class EngineManager(
             EngineType.LEELAZERO -> {
                 val weights = try { ensureWeightsExtracted(type) } catch (e: EngineException) { "" }
                 val binaryPath = try { ensureBinaryExtracted(type) } catch (e: EngineException) { "" }
-                val workingDir = File(appContext.filesDir, "bin").absolutePath
+                val workingDir = (appContext.getExternalFilesDir("bin")
+                    ?: File(appContext.filesDir, "bin")).absolutePath
                 val cfg = preferences.getLeelaZeroConfig().copy(
                     weightsPath = weights,
                     executablePath = binaryPath,

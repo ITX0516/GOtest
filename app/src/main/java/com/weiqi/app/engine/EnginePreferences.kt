@@ -79,11 +79,15 @@ class EnginePreferences(context: Context) {
     }
 
     /**
-     * 获取权重文件目录（`filesDir/weights/`），不存在则创建。
+     * 获取权重文件目录（`Android/data/<pkg>/files/weights/`），不存在则创建。
+     * 优先使用外部存储（无 root 也能通过文件管理器访问并替换权重），
+     * 若外部存储不可用则回退到 `filesDir/weights/`。
+     *
      * 引擎启动前由 [EngineManager.ensureWeightsExtracted] 解压/复制到这里。
      */
     fun getWeightsDir(): File {
-        val dir = File(appContext.filesDir, "weights")
+        val dir = appContext.getExternalFilesDir("weights")
+            ?: File(appContext.filesDir, "weights")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
