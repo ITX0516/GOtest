@@ -102,46 +102,30 @@ jobs:
             echo "Eigen headers found at $EIGEN_DIR"
           fi
 
-      - name: Build kataGo binary for arm64-v8a
+      - name: Build katago binary (arm64-v8a, armeabi-v7a)
         if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
         run: |
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
           KATAGO_SRC="app/src/main/cpp/third_party/katago/cpp"
-          mkdir -p build-katago/arm64-v8a
-          cd build-katago/arm64-v8a
-          cmake "$GITHUB_WORKSPACE/$KATAGO_SRC" \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-24 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_CPU_ONLY=1 \
-            -DNO_GIT_REVISION=1 \
-            -DBUILD_TESTING=OFF \
-            -DCMAKE_CXX_FLAGS="-DBYTE_ORDER=LITTLE_ENDIAN"
-          cmake --build . -j$(nproc) --target katago
-          mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/bin/arm64-v8a"
-          cp katago "$GITHUB_WORKSPACE/app/src/main/assets/bin/arm64-v8a/katago"
-          ls -lh "$GITHUB_WORKSPACE/app/src/main/assets/bin/arm64-v8a/katago"
-
-      - name: Build kataGo binary for armeabi-v7a
-        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
-        run: |
-          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
-          KATAGO_SRC="app/src/main/cpp/third_party/katago/cpp"
-          mkdir -p build-katago/armeabi-v7a
-          cd build-katago/armeabi-v7a
-          cmake "$GITHUB_WORKSPACE/$KATAGO_SRC" \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
-            -DANDROID_ABI=armeabi-v7a \
-            -DANDROID_PLATFORM=android-24 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DUSE_CPU_ONLY=1 \
-            -DNO_GIT_REVISION=1 \
-            -DBUILD_TESTING=OFF
-          cmake --build . -j$(nproc) --target katago
-          mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/bin/armeabi-v7a"
-          cp katago "$GITHUB_WORKSPACE/app/src/main/assets/bin/armeabi-v7a/katago"
-          ls -lh "$GITHUB_WORKSPACE/app/src/main/assets/bin/armeabi-v7a/katago"
+          export CXXFLAGS="-DBYTE_ORDER=LITTLE_ENDIAN"
+          for ABI in arm64-v8a armeabi-v7a; do
+            echo "=== Building katago for $ABI ==="
+            mkdir -p build-katago/$ABI
+            cd build-katago/$ABI
+            cmake "$GITHUB_WORKSPACE/$KATAGO_SRC" \
+              -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
+              -DANDROID_ABI=$ABI \
+              -DANDROID_PLATFORM=android-24 \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DUSE_CPU_ONLY=1 \
+              -DNO_GIT_REVISION=1 \
+              -DBUILD_TESTING=OFF
+            cmake --build . -j$(nproc) --target katago
+            mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI"
+            cp katago "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI/katago"
+            ls -lh "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI/katago"
+            cd "$GITHUB_WORKSPACE"
+          done
 
       - name: Set engine mode in build.gradle.kts
         run: |
