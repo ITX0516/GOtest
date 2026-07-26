@@ -40,7 +40,7 @@ env:
 
 jobs:
   build-apk:
-    name: Build APK (${{ inputs.engine_mode || 'STUB' }})
+    name: Build APK (${{ inputs.engine_mode || 'BUILTIN' }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -118,7 +118,7 @@ jobs:
 
       - name: Set engine mode in build.gradle.kts
         run: |
-          ENGINE_MODE="${{ inputs.engine_mode || 'STUB' }}"
+          ENGINE_MODE="${{ inputs.engine_mode || 'BUILTIN' }}"
           echo "Setting WEIQI_ENGINE_MODE=$ENGINE_MODE"
           sed -i "s/-DWEIQI_ENGINE_MODE=[A-Z]*/-DWEIQI_ENGINE_MODE=$ENGINE_MODE/" app/build.gradle.kts
           echo "After sed:"
@@ -161,7 +161,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: weiqi-app-${{ inputs.engine_mode || 'STUB' }}-${{ inputs.build_type || 'debug' }}
+          name: weiqi-app-${{ inputs.engine_mode || 'BUILTIN' }}-${{ inputs.build_type || 'debug' }}
           path: |
             app/build/outputs/apk/**/*.apk
           retention-days: 30
