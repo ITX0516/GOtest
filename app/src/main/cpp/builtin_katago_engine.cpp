@@ -31,19 +31,36 @@
 
 namespace weiqi {
 
+// Bring KataGo global types into weiqi namespace
+using ::Logger;
+using ::NNEvaluator;
+using ::AsyncBot;
+using ::SearchParams;
+using ::TimeControls;
+using ::Board;
+using ::BoardHistory;
+using ::Player;
+using ::Rules;
+using ::Loc;
+using ::Location;
+using ::enabled_t;
+using ::C_BLACK;
+using ::C_WHITE;
+using ::getOpp;
+
 // ===== KataGoEngineImpl =====
 struct BuiltinKataGoEngine::KataGoEngineImpl {
-    std::unique_ptr<Logger> logger;
-    std::unique_ptr<NNEvaluator> nnEval;
-    std::unique_ptr<AsyncBot> bot;
-    SearchParams searchParams;
-    TimeControls timeControls;  // KataGo v1.16.4 requires TimeControls
+    std::unique_ptr<::Logger> logger;
+    std::unique_ptr<::NNEvaluator> nnEval;
+    std::unique_ptr<::AsyncBot> bot;
+    ::SearchParams searchParams;
+    ::TimeControls timeControls;
 
-    Board board;
-    BoardHistory hist;
-    Player nextPla;
+    ::Board board;
+    ::BoardHistory hist;
+    ::Player nextPla;
 
-    Rules rules;
+    ::Rules rules;
     double komi;
     int boardSize;
     bool useFP16 = false;
