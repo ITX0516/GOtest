@@ -41,10 +41,6 @@ class EngineManager(
     private val appContext: Context = context.applicationContext
     private val lifecycleMutex = Mutex()
 
-    private companion object {
-        const val TAG = "EngineManager"
-    }
-
     @Volatile private var currentEngine: GoEngine? = null
 
     /** 当前活跃引擎；未启动时为 null。 */
@@ -346,6 +342,7 @@ class EngineManager(
     }
 
     companion object {
+        private const val TAG = "EngineManager"
         /** 引擎最低可用内存要求：1GB。 */
         private const val MIN_REQUIRED_MEMORY_BYTES = 1L * 1024 * 1024 * 1024
 
