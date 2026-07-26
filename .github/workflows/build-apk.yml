@@ -102,8 +102,18 @@ jobs:
             echo "Eigen headers found at $EIGEN_DIR"
           fi
 
-      - name: Build katago binary (arm64-v8a)
+      - name: Cache KataGo build
         if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
+        id: cache-katago
+        uses: actions/cache@v4
+        with:
+          path: |
+            build-katago/arm64-v8a/katago
+            app/src/main/jniLibs/arm64-v8a/libkatago.so
+          key: katago-arm64-v8a-v1.16.4-ndk-${{ env.ANDROID_NDK_VERSION }}
+
+      - name: Build katago binary (arm64-v8a)
+        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' && steps.cache-katago.outputs.cache-hit != 'true' }}
         run: |
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
           KATAGO_SRC="app/src/main/cpp/third_party/katago/cpp"
