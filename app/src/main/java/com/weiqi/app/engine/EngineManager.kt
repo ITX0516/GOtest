@@ -7,6 +7,7 @@ import com.weiqi.app.engine.jni.NativeEngineBridge
 import com.weiqi.app.remote.RemoteConfig
 import com.weiqi.app.remote.RemoteEngine
 import com.weiqi.app.remote.RemotePlatform
+import com.weiqi.app.util.AppLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -39,6 +40,10 @@ class EngineManager(
 ) {
     private val appContext: Context = context.applicationContext
     private val lifecycleMutex = Mutex()
+
+    private companion object {
+        const val TAG = "EngineManager"
+    }
 
     @Volatile private var currentEngine: GoEngine? = null
 
@@ -225,7 +230,9 @@ class EngineManager(
     // ===== 内部实现 =====
 
     private suspend fun createAndStart(type: EngineType): GoEngine {
+        AppLogger.i(TAG, "createAndStart: type=$type")
         if (!deviceSupportsEngine(type)) {
+            AppLogger.e(TAG, "设备不支持 $type 引擎（ABI 或内存检查未通过）")
             throw EngineException("设备不支持 ${type.displayName} 引擎（需 arm64-v8a/x86_64 且可用内存 ≥ 1GB）")
         }
         val engine: GoEngine = when (type) {
@@ -235,6 +242,7 @@ class EngineManager(
                 val weightsPath = preferences.resolveKataGoWeightsPath()
                 // 二进制路径优先级：ensureBinaryExtracted > 用户自定义 > 公共目录扫描
                 val binaryPath = extractedBinary.ifBlank { preferences.resolveKataGoBinaryPath() }
+                AppLogger.i(TAG, "KataGo 路径解析: weights=$weightsPath  binary=$binaryPath")
                 // 预检查：权重与二进制必须存在，否则给出明确错误（避免 native crash 闪退）
                 requireFile(weightsPath, "KataGo 权重文件", "请在设置页选择 .bin.gz 权重文件")
                 requireExecutable(binaryPath, "KataGo 引擎二进制",
@@ -243,6 +251,7 @@ class EngineManager(
                     try { ensureConfigExtracted(EnginePreferences.ASSET_KATAGO_CONFIG) } catch (_: Exception) { "" }
                 }.ifBlank { ensureDefaultKatagoConfig() }
                 val workingDir = appContext.filesDir.absolutePath
+                AppLogger.i(TAG, "KataGo 配置: config=$configPath  workingDir=$workingDir")
                 val cfg = preferences.getKataGoConfig().copy(
                     weightsPath = weightsPath,
                     executablePath = binaryPath,
@@ -256,6 +265,7 @@ class EngineManager(
                 val extractedBinary = ensureBinaryExtracted(type)
                 val weightsPath = preferences.resolveLeelaWeightsPath()
                 val binaryPath = extractedBinary.ifBlank { preferences.resolveLeelaBinaryPath() }
+                AppLogger.i(TAG, "LeelaZero 路径解析: weights=$weightsPath  binary=$binaryPath")
                 // 预检查：LeelaZero 二进制不会随 APK 打包，必须由用户提供
                 requireFile(weightsPath, "LeelaZero 权重文件", "请在设置页选择 .txt.gz 权重文件")
                 requireExecutable(binaryPath, "LeelaZero 引擎二进制",
@@ -275,12 +285,17 @@ class EngineManager(
         }
 
         try {
+            AppLogger.i(TAG, "调用 engine.start()...")
             engine.start()
+            AppLogger.i(TAG, "engine.start() 成功")
         } catch (e: EngineException) {
+            AppLogger.e(TAG, "engine.start() 抛 EngineException: ${e.message}", e)
             throw e
         } catch (e: UnsatisfiedLinkError) {
+            AppLogger.e(TAG, "engine.start() 抛 UnsatisfiedLinkError: ${e.message}", e)
             throw EngineException("无法加载 libweiqi_engine.so：${e.message}", e)
         } catch (e: Throwable) {
+            AppLogger.e(TAG, "engine.start() 抛异常: ${e.javaClass.simpleName}: ${e.message}", e)
             throw EngineException("启动 ${type.displayName} 引擎失败：${e.message}", e)
         }
         return engine
@@ -289,29 +304,37 @@ class EngineManager(
     /** 检查普通文件是否存在且可读；不存在抛出带提示的 [EngineException]。 */
     private fun requireFile(path: String, label: String, hint: String) {
         if (path.isBlank()) {
+            AppLogger.e(TAG, "requireFile 失败：$label 路径为空。$hint")
             throw EngineException("$label 未设置。$hint")
         }
         val f = File(path)
         if (!f.exists() || !f.canRead()) {
+            AppLogger.e(TAG, "requireFile 失败：$label 不存在或不可读: $path。$hint")
             throw EngineException("$label 不存在或不可读：$path。$hint")
         }
         if (f.length() == 0L) {
+            AppLogger.e(TAG, "requireFile 失败：$label 为空文件: $path。$hint")
             throw EngineException("$label 为空文件：$path。$hint")
         }
+        AppLogger.i(TAG, "requireFile 通过: $label size=${f.length()} path=$path")
     }
 
     /** 检查可执行文件是否存在且可执行；不存在抛出带提示的 [EngineException]。 */
     private fun requireExecutable(path: String, label: String, hint: String) {
         if (path.isBlank()) {
+            AppLogger.e(TAG, "requireExecutable 失败：$label 路径为空。$hint")
             throw EngineException("$label 未设置。$hint")
         }
         val f = File(path)
         if (!f.exists()) {
+            AppLogger.e(TAG, "requireExecutable 失败：$label 不存在: $path。$hint")
             throw EngineException("$label 不存在：$path。$hint")
         }
         if (!f.canExecute()) {
+            AppLogger.e(TAG, "requireExecutable 失败：$label 不可执行: $path（W^X 拦截？应放 nativeLibraryDir）。$hint")
             throw EngineException("$label 不可执行：$path。$hint")
         }
+        AppLogger.i(TAG, "requireExecutable 通过: $label size=${f.length()} path=$path")
     }
 
     private suspend fun stopInternal(engine: GoEngine) {

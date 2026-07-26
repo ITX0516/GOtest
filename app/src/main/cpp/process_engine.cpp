@@ -13,11 +13,18 @@
 #include <sstream>
 #include <thread>
 
+#include "app_log.h"
+
 #define LOG_TAG "weiqi_engine"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+
+namespace {
+// 工具：errno 转 std::string
+std::string errStr(int e) { return std::string(strerror(e)) + " (errno=" + std::to_string(e) + ")"; }
+}
 
 namespace weiqi {
 
@@ -35,17 +42,45 @@ ProcessGtpEngine::~ProcessGtpEngine() {
 // ===== 启动与停止 =====
 
 bool ProcessGtpEngine::start() {
+    weiqi::log::i("weiqi_engine", "ProcessGtpEngine::start() 开始，executable=" + executablePath_);
     {
         std::lock_guard<std::mutex> lock(commandMutex_);
         if (running_.load()) {
+            weiqi::log::w("weiqi_engine", "start() 已在运行，直接返回 true");
             return true;  // 已启动
         }
 
+        // 预检查：可执行文件是否存在、可执行
+        if (executablePath_.empty()) {
+            lastError_ = "executablePath 为空";
+            weiqi::log::e("weiqi_engine", "start() 失败：" + lastError_);
+            return false;
+        }
+        if (access(executablePath_.c_str(), F_OK) != 0) {
+            lastError_ = "可执行文件不存在: " + executablePath_;
+            weiqi::log::e("weiqi_engine", "start() 失败：" + lastError_);
+            return false;
+        }
+        if (access(executablePath_.c_str(), X_OK) != 0) {
+            lastError_ = "文件不可执行: " + executablePath_ + "（W^X 策略下 filesDir 不可执行，需放 nativeLibraryDir）";
+            weiqi::log::e("weiqi_engine", "start() 失败：" + lastError_);
+            return false;
+        }
+
+        weiqi::log::i("weiqi_engine", "spawnProcess 开始，argv[0]=" + executablePath_ +
+                      " args.size=" + std::to_string(args_.size()));
+        // 打印完整命令行
+        std::string cmdLine = executablePath_;
+        for (const auto& a : args_) { cmdLine += " [" + a + "]"; }
+        weiqi::log::d("weiqi_engine", "完整命令行: " + cmdLine);
+
         if (!spawnProcess()) {
+            weiqi::log::e("weiqi_engine", "spawnProcess 失败：" + lastError_);
             return false;
         }
 
         running_.store(true);
+        weiqi::log::i("weiqi_engine", "spawnProcess 成功，pid=" + std::to_string(childPid_));
 
         // 启动读取线程
         readThread_ = std::thread([this]() { readLoop(); });
@@ -69,14 +104,18 @@ bool ProcessGtpEngine::start() {
                 lastError_ = "引擎被信号终止 (signal=" +
                              std::to_string(WTERMSIG(status)) + ")";
             }
-            LOGE("engine died immediately: %s", lastError_.c_str());
+            weiqi::log::e("weiqi_engine", "子进程启动后立即崩溃: " + lastError_ +
+                          "（常见原因：权重文件路径错/缺失、配置文件错误、ABI 不匹配、缺少动态库）");
             return false;
         }
+        weiqi::log::i("weiqi_engine", "子进程存活，开始查询版本");
     }
 
     // 查询版本（sendCommand 内部会抢锁，所以必须在锁外调用）
     queryVersionAfterStart();
 
+    weiqi::log::i("weiqi_engine", "ProcessGtpEngine::start() 完成: name=" + name_ +
+                  " version=" + version_);
     return true;
 }
 
@@ -212,7 +251,8 @@ bool ProcessGtpEngine::spawnProcess() {
 
     if (errRead > 0) {
         // execvp 失败
-        LOGE("execvp(%s) failed: %s", executablePath_.c_str(), strerror(execErrno));
+        std::string errMsg = "execvp(" + executablePath_ + ") 失败: " + errStr(execErrno);
+        weiqi::log::e("weiqi_engine", errMsg + "（可能是 W^X 拦截 / 文件格式错 / 缺少 ELF 解释器）");
         // 回收子进程
         int status = 0;
         waitpid(pid, &status, 0);
@@ -228,7 +268,8 @@ bool ProcessGtpEngine::spawnProcess() {
     int flags = fcntl(stdoutFd_, F_GETFL, 0);
     fcntl(stdoutFd_, F_SETFL, flags | O_NONBLOCK);
 
-    LOGI("spawned engine pid=%d, exec=%s", pid, executablePath_.c_str());
+    weiqi::log::i("weiqi_engine", "spawned engine pid=" + std::to_string(pid) +
+                  " exec=" + executablePath_);
     return true;
 }
 

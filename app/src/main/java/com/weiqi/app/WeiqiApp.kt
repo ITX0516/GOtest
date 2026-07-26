@@ -5,6 +5,7 @@ import com.weiqi.app.engine.EngineManager
 import com.weiqi.app.engine.EnginePreferences
 import com.weiqi.app.ui.theme.SoundManager
 import com.weiqi.app.ui.theme.ThemePreferences
+import com.weiqi.app.util.AppLogger
 
 /**
  * 应用入口，初始化全局单例。
@@ -25,10 +26,16 @@ class WeiqiApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        // 日志系统必须最先初始化（其他模块都会用它）
+        AppLogger.init(this)
+        AppLogger.i("WeiqiApp", "Application.onCreate 开始")
+
         enginePreferences = EnginePreferences(this)
         engineManager = EngineManager(this, enginePreferences)
         themePreferences = ThemePreferences(this)
         soundManager = SoundManager(this)
+
+        AppLogger.i("WeiqiApp", "Application.onCreate 完成")
     }
 
     companion object {

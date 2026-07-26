@@ -43,7 +43,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -180,8 +182,142 @@ fun SettingsScreen(
                 onToggle = viewModel::setSoundEnabled
             )
 
+            HorizontalDivider()
+
+            LogSection()
+
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/**
+ * 日志查看区：显示日志文件路径，支持查看 / 分享 / 清空。
+ *
+ * 日志位置：Android/data/com.weiqi.app/files/logs/app.log
+ * 用户可用文件管理器直接打开，也可在此处分享。
+ */
+@Composable
+private fun LogSection() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val logFile = remember { com.weiqi.app.util.AppLogger.getLogFile() }
+    var logSize by remember { mutableStateOf(logFile?.length() ?: 0L) }
+    val viewLogDialog = remember { androidx.compose.runtime.mutableStateOf(false) }
+
+    Card(modifier = Modifier.fillMaxWidth(), elevation = CardDefaults.cardElevation(2.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("日志", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "路径：${logFile?.absolutePath ?: "未初始化"}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = "大小：${formatLogSize(logSize)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { viewLogDialog.value = true }
+                ) {
+                    Icon(Icons.Filled.FolderOpen, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("查看")
+                }
+                OutlinedButton(
+                    onClick = {
+                        logFile?.let { file ->
+                            shareLogFile(context, file)
+                        }
+                    },
+                    enabled = logFile != null && logSize > 0
+                ) {
+                    Text("分享")
+                }
+                OutlinedButton(
+                    onClick = {
+                        com.weiqi.app.util.AppLogger.clear()
+                        logSize = 0
+                    }
+                ) {
+                    Text("清空")
+                }
+            }
+        }
+    }
+
+    if (viewLogDialog.value) {
+        LogContentDialog(
+            logFile = logFile,
+            onDismiss = { viewLogDialog.value = false },
+            onCleared = { logSize = 0L }
+        )
+    }
+}
+
+@Composable
+private fun LogContentDialog(
+    logFile: File?,
+    onDismiss: () -> Unit,
+    onCleared: () -> Unit
+) {
+    val content = remember(logFile) {
+        try {
+            logFile?.readText()?.takeLast(50_000) ?: "日志文件不可读"
+        } catch (e: Exception) {
+            "读取失败：${e.message}"
+        }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("日志内容（末尾 50KB）")
+        },
+        text = {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(400.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = content,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) { Text("关闭") }
+        }
+    )
+}
+
+private fun shareLogFile(context: android.content.Context, file: File) {
+    val uri = androidx.core.content.FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        file
+    )
+    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(android.content.Intent.createChooser(intent, "分享日志文件"))
+}
+
+private fun formatLogSize(bytes: Long): String {
+    return when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        else -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
     }
 }
 

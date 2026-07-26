@@ -17,10 +17,12 @@ message(STATUS "Weiqi engine mode: ${WEIQI_ENGINE_MODE}")
 set(WEIQI_CORE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/jni_bridge.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/gtp_engine.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/app_log.cpp
 )
 
 set(WEIQI_CORE_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/gtp_engine.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/app_log.h
 )
 
 set(CMAKE_CXX_STANDARD 17)

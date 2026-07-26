@@ -5,6 +5,7 @@ import com.weiqi.app.core.Move
 import com.weiqi.app.core.Stone
 import com.weiqi.app.core.Vertex
 import com.weiqi.app.engine.jni.NativeEngineBridge
+import com.weiqi.app.util.AppLogger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -48,6 +49,10 @@ abstract class BaseNativeEngine(
 
     protected val gtpLock = Any()
 
+    protected companion object {
+        const val TAG = "BaseNativeEngine"
+    }
+
     /** 流式分析默认超时（毫秒）。 */
     protected open val analysisTimeoutMs: Long = 10_000L
 
@@ -66,24 +71,36 @@ abstract class BaseNativeEngine(
     @Volatile private var ponderCallbackId: Int? = null
 
     override suspend fun start() = withContext(Dispatchers.Default) {
-        if (handle != 0L) return@withContext // 幂等
+        if (handle != 0L) {
+            AppLogger.d(TAG, "start() 已有 handle，跳过")
+            return@withContext // 幂等
+        }
+        AppLogger.i(TAG, "start() 调用 nativeCreateEngine，type=$engineTypeCode")
+        AppLogger.d(TAG, "config: ${config.toJson()}")
         val h = try {
             NativeEngineBridge.createEngine(engineTypeCode, config.toJson())
         } catch (e: UnsatisfiedLinkError) {
+            AppLogger.e(TAG, "nativeCreateEngine UnsatisfiedLinkError: ${e.message}", e)
             throw EngineException("无法加载 native 引擎库 libweiqi_engine.so：${e.message}", e)
         } catch (e: Throwable) {
+            AppLogger.e(TAG, "nativeCreateEngine 异常: ${e.javaClass.simpleName}: ${e.message}", e)
             throw EngineException("创建 native 引擎异常：${e.message}", e)
         }
         if (h == 0L) {
+            AppLogger.e(TAG, "nativeCreateEngine 返回 0，详情见上方 native 日志")
             throw EngineException("创建 native 引擎失败（type=${engineTypeCode}），请检查权重文件与 ABI")
         }
+        AppLogger.i(TAG, "nativeCreateEngine 成功，handle=$h")
         handle = h
         try {
             // 初始化棋盘与贴目
+            AppLogger.i(TAG, "初始化棋盘 boardsize=${config.boardSize} komi=${config.komi}")
             send(GtpCommand.boardsize(config.boardSize))
             send(GtpCommand.clearBoard())
             send(GtpCommand.komi(config.komi))
+            AppLogger.i(TAG, "引擎就绪")
         } catch (e: EngineException) {
+            AppLogger.e(TAG, "初始化棋盘失败: ${e.message}", e)
             try { NativeEngineBridge.destroyEngine(h) } catch (_: Throwable) {}
             handle = 0L
             throw e
@@ -109,10 +126,13 @@ abstract class BaseNativeEngine(
             val resp = try {
                 NativeEngineBridge.sendGtpCommand(handle, command)
             } catch (e: Throwable) {
+                AppLogger.e(TAG, "GTP 命令发送失败 [$command]: ${e.javaClass.simpleName}: ${e.message}", e)
                 throw EngineException("GTP 命令发送失败 [$command]：${e.message}", e)
             }
             if (resp.startsWith("error:")) {
-                throw EngineException("GTP 错误 [$command]：${resp.removePrefix("error:").trim()}")
+                val err = resp.removePrefix("error:").trim()
+                AppLogger.e(TAG, "GTP 错误 [$command]: $err")
+                throw EngineException("GTP 错误 [$command]：$err")
             }
             return resp
         }

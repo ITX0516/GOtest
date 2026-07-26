@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 允许分享 external-files-dir 下的文件（日志所在目录） -->
+    <external-files-path
+        name="external_files"
+        path="." />
+    <files-path
+        name="internal_files"
+        path="." />
+</paths>

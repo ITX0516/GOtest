@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "gtp_engine.h"
+#include "app_log.h"
 
 #if defined(WEIQI_PROCESS_MODE)
     #include "real_engines.h"
@@ -206,29 +207,38 @@ static inline weiqi::GtpEngine* handleToEngine(jlong handle) {
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
     g_jvm = vm;
+
+    // 必须最先初始化日志系统（含 native crash 信号处理）
+    weiqi::log::init(vm);
+    weiqi::log::i("weiqi_jni", "JNI_OnLoad 开始");
+
     JNIEnv* env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        weiqi::log::e("weiqi_jni", "JNI_OnLoad: GetEnv failed");
         return JNI_ERR;
     }
 
     const char* kClassName = "com/weiqi/app/engine/jni/NativeEngineBridge";
     jclass localClass = env->FindClass(kClassName);
     if (localClass == nullptr) {
-        LOGE("JNI_OnLoad: cannot find class %s", kClassName);
+        weiqi::log::e("weiqi_jni", std::string("JNI_OnLoad: cannot find class ") + kClassName);
         return JNI_ERR;
     }
     g_bridgeClass = reinterpret_cast<jclass>(env->NewGlobalRef(localClass));
     env->DeleteLocalRef(localClass);
-    if (g_bridgeClass == nullptr) return JNI_ERR;
+    if (g_bridgeClass == nullptr) {
+        weiqi::log::e("weiqi_jni", "JNI_OnLoad: NewGlobalRef failed");
+        return JNI_ERR;
+    }
 
     g_onAnalysisUpdateMethod = env->GetStaticMethodID(
         g_bridgeClass, "onAnalysisUpdate", "(ILjava/lang/String;)V");
     if (g_onAnalysisUpdateMethod == nullptr) {
-        LOGE("JNI_OnLoad: cannot find onAnalysisUpdate method");
+        weiqi::log::e("weiqi_jni", "JNI_OnLoad: cannot find onAnalysisUpdate method");
         return JNI_ERR;
     }
 
-    LOGI("JNI_OnLoad: weiqi_engine bridge ready");
+    weiqi::log::i("weiqi_jni", "JNI_OnLoad: weiqi_engine bridge ready");
     return JNI_VERSION_1_6;
 }
 
@@ -251,16 +261,27 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeCreateEngine(
         }
     }
 
+    std::string typeStr = (engineType == 1) ? "KATAGO" :
+                          (engineType == 2) ? "LEELAZERO" :
+                          std::string("UNKNOWN(") + std::to_string(engineType) + ")";
+    weiqi::log::i("weiqi_jni", "nativeCreateEngine 开始 type=" + typeStr);
+    weiqi::log::d("weiqi_jni", "config: " + config);
+
     auto engine = createEngineInstance(static_cast<int>(engineType), config);
     if (!engine) {
-        LOGE("createEngine: failed (type=%d)", (int)engineType);
+        weiqi::log::e("weiqi_jni", "createEngineInstance 返回 nullptr (type=" + typeStr +
+                      ")，可能：引擎模式未匹配 / weightsPath 为空 / 未知引擎类型");
         return 0;
     }
+    weiqi::log::i("weiqi_jni", "createEngineInstance 成功，开始 start()");
+
     if (!engine->start()) {
-        LOGE("createEngine: start() failed (type=%d)", (int)engineType);
+        weiqi::log::e("weiqi_jni", "engine->start() 返回 false (type=" + typeStr +
+                      ")，子进程启动失败或立即退出");
         return 0;
     }
-    LOGI("createEngine: started (type=%d, name=%s)", (int)engineType, engine->name().c_str());
+    weiqi::log::i("weiqi_jni", "engine->start() 成功: name=" + engine->name() +
+                  " version=" + engine->version());
     return reinterpret_cast<jlong>(engine.release());
 }
 
