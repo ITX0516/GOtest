@@ -1,6 +1,7 @@
 #ifndef WEIQI_APP_LOG_H
 #define WEIQI_APP_LOG_H
 
+#include <jni.h>
 #include <string>
 
 namespace weiqi {
@@ -28,12 +29,5 @@ inline void e(const char* tag, const std::string& msg) { write("E", tag, msg); }
 
 } // namespace log
 } // namespace weiqi
-
-// 便捷宏：自动带上文件名+行号
-#define LOGV(tag, msg) weiqi::log::v(tag, (std::string(__FILE__) + ":" + std::to_string(__LINE__) + " " + msg))
-#define LOGD(tag, msg) weiqi::log::d(tag, (std::string(__FILE__) + ":" + std::to_string(__LINE__) + " " + msg))
-#define LOGI(tag, msg) weiqi::log::i(tag, (std::string(__FILE__) + ":" + std::to_string(__LINE__) + " " + msg))
-#define LOGW(tag, msg) weiqi::log::w(tag, (std::string(__FILE__) + ":" + std::to_string(__LINE__) + " " + msg))
-#define LOGE(tag, msg) weiqi::log::e(tag, (std::string(__FILE__) + ":" + std::to_string(__LINE__) + " " + msg))
 
 #endif // WEIQI_APP_LOG_H
