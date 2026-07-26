@@ -116,43 +116,86 @@ class EngineManager(
     }
 
     /**
-     * 从 assets 复制引擎可执行文件到 `filesDir/bin/`，已存在则跳过，并设置可执行权限。
-     * 仅作为备选方案。
+     * 确保引擎可执行文件就位并返回其路径。
+     *
+     * Android 10+ (API 29+) 的 W^X 策略禁止从 `filesDir` 执行二进制文件，
+     * 因此优先将二进制复制到 `nativeLibraryDir`（该目录允许执行）。
+     *
+     * 路径优先级：
+     * 1. jniLibs 中已打包的 `libkatago.so` / `libleelaz.so`（nativeLibraryDir，无需复制）
+     * 2. 从 assets 复制到 nativeLibraryDir（运行时复制）
+     * 3. 从 assets 复制到 filesDir/bin/（旧设备回退，Android 9 及以下可执行）
      *
      * @param engineType 引擎类型（KATAGO / LEELAZERO）。
-     * @return 目标可执行文件绝对路径；assets 中无对应文件则返回空字符串（不抛异常）。
+     * @return 可执行文件绝对路径；无可用文件则返回空字符串。
      */
     suspend fun ensureBinaryExtracted(engineType: EngineType): String = withContext(Dispatchers.IO) {
-        val (assetName, binaryName) = when (engineType) {
-            EngineType.KATAGO -> {
-                val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-                "bin/$abi/katago" to "katago"
-            }
-            EngineType.LEELAZERO -> {
-                val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-                "bin/$abi/leelaz" to "leelaz"
-            }
+        if (engineType == EngineType.REMOTE) return@withContext ""
+
+        val binaryName = when (engineType) {
+            EngineType.KATAGO -> "katago"
+            EngineType.LEELAZERO -> "leelaz"
             EngineType.REMOTE -> return@withContext ""
         }
-        val destDir = File(appContext.filesDir, "bin")
-        if (!destDir.exists()) destDir.mkdirs()
-        val destFile = File(destDir, binaryName)
 
-        if (!destFile.exists() || destFile.length() == 0L) {
-            try {
-                appContext.assets.open(assetName).use { input ->
-                    destFile.outputStream().use { output -> input.copyTo(output) }
-                }
-                destFile.setExecutable(true, false)
-            } catch (_: IOException) {
-                return@withContext ""
-            }
-        } else {
-            if (!destFile.canExecute()) {
-                destFile.setExecutable(true, false)
-            }
+        // 1. 检查 nativeLibraryDir 中是否已有 jniLibs 打包的二进制
+        val nativeDir = appContext.applicationInfo.nativeLibraryDir
+        val soName = "lib${binaryName}.so"
+        val nativeFile = File(nativeDir, soName)
+        if (nativeFile.exists() && nativeFile.canExecute()) {
+            return@withContext nativeFile.absolutePath
         }
-        destFile.absolutePath
+
+        // 2. 从 assets 复制到 nativeLibraryDir
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        val assetName = "bin/$abi/$binaryName"
+        if (copyAssetToDir(assetName, nativeDir, soName)) {
+            val dest = File(nativeDir, soName)
+            dest.setExecutable(true, false)
+            return@withContext dest.absolutePath
+        }
+
+        // 3. 回退：复制到 filesDir/bin/（Android 9 及以下可执行）
+        val fallbackDir = File(appContext.filesDir, "bin")
+        if (!fallbackDir.exists()) fallbackDir.mkdirs()
+        val fallbackFile = File(fallbackDir, binaryName)
+        if (copyAssetToDir(assetName, fallbackDir.absolutePath, binaryName)) {
+            fallbackFile.setExecutable(true, false)
+            return@withContext fallbackFile.absolutePath
+        }
+
+        ""
+    }
+
+    /** 从 assets 复制单个文件到目标目录。已存在且大小相同则跳过。 */
+    private fun copyAssetToDir(assetName: String, destDirPath: String, destFileName: String): Boolean {
+        return try {
+            val destDir = File(destDirPath)
+            if (!destDir.exists()) destDir.mkdirs()
+            val destFile = File(destDir, destFileName)
+            appContext.assets.open(assetName).use { input ->
+                destFile.outputStream().use { output -> input.copyTo(output) }
+            }
+            true
+        } catch (_: IOException) {
+            false
+        }
+    }
+
+    /**
+     * 生成最小 KataGo 配置文件（如 assets 中无配置文件）。
+     * 关键设置：禁用 logToStdout（避免干扰 GTP 协议）、禁用日志文件。
+     */
+    private fun ensureDefaultKatagoConfig(): String = try {
+        val configDir = File(appContext.filesDir, "config")
+        if (!configDir.exists()) configDir.mkdirs()
+        val configFile = File(configDir, "katago_default.cfg")
+        if (!configFile.exists()) {
+            configFile.writeText(DEFAULT_KATAGO_CONFIG)
+        }
+        configFile.absolutePath
+    } catch (_: Exception) {
+        ""
     }
 
     /**
@@ -209,16 +252,15 @@ class EngineManager(
         }
         val engine: GoEngine = when (type) {
             EngineType.KATAGO -> {
-                // 1. 先尝试从 assets 解压（备用方案，asset 若无文件则静默返回空）
                 ensureWeightsExtracted(type)
-                ensureBinaryExtracted(type)
-                // 2. 使用 EnginePreferences 的优先级解析：用户路径 > assets > 公共扫描
+                val extractedBinary = ensureBinaryExtracted(type)
                 val weightsPath = preferences.resolveKataGoWeightsPath()
-                val binaryPath = preferences.resolveKataGoBinaryPath()
+                // 二进制路径优先级：ensureBinaryExtracted > 用户自定义 > 公共目录扫描
+                val binaryPath = extractedBinary.ifBlank { preferences.resolveKataGoBinaryPath() }
                 val configPath = preferences.getKataGoConfigPath().ifBlank {
                     try { ensureConfigExtracted(EnginePreferences.ASSET_KATAGO_CONFIG) } catch (_: Exception) { "" }
-                }
-                val workingDir = File(appContext.filesDir, "bin").absolutePath
+                }.ifBlank { ensureDefaultKatagoConfig() }
+                val workingDir = appContext.filesDir.absolutePath
                 val cfg = preferences.getKataGoConfig().copy(
                     weightsPath = weightsPath,
                     executablePath = binaryPath,
@@ -229,10 +271,10 @@ class EngineManager(
             }
             EngineType.LEELAZERO -> {
                 ensureWeightsExtracted(type)
-                ensureBinaryExtracted(type)
+                val extractedBinary = ensureBinaryExtracted(type)
                 val weightsPath = preferences.resolveLeelaWeightsPath()
-                val binaryPath = preferences.resolveLeelaBinaryPath()
-                val workingDir = File(appContext.filesDir, "bin").absolutePath
+                val binaryPath = extractedBinary.ifBlank { preferences.resolveLeelaBinaryPath() }
+                val workingDir = appContext.filesDir.absolutePath
                 val cfg = preferences.getLeelaZeroConfig().copy(
                     weightsPath = weightsPath,
                     executablePath = binaryPath,
@@ -269,6 +311,29 @@ class EngineManager(
     companion object {
         /** 引擎最低可用内存要求：1GB。 */
         private const val MIN_REQUIRED_MEMORY_BYTES = 1L * 1024 * 1024 * 1024
+
+        /**
+         * KataGo 最小配置（手机端 GTP 模式）。
+         * 关键：禁用 logToStdout（否则日志会干扰 GTP 协议解析）。
+         */
+        private const val DEFAULT_KATAGO_CONFIG = """
+# KataGo 手机端最小配置
+# 日志
+logDir = .
+logDirGTP = .
+logToStdout = false
+logAllGTPCommunication = false
+logSearchInfo = false
+# 搜索
+numSearchThreads = 2
+maxVisits = 800
+# 棋盘
+defaultBoardSize = 19
+defaultKomi = 7.5
+maxBoardSize = 19
+# 神经网络（CPU 模式）
+nnMaxBatchSize = 1
+"""
 
         /** 探测 native 端某引擎类型是否已链接（不依赖 EnginePreferences）。 */
         fun isNativeEngineAvailable(engineType: EngineType): Boolean {

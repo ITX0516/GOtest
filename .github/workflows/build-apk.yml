@@ -124,9 +124,14 @@ jobs:
               -DNO_GIT_REVISION=1 \
               -DBUILD_TESTING=OFF
             cmake --build . -j$(nproc) --target katago
+            # 拷贝到 jniLibs（命名为 libkatago.so，包管理器会自动解压到 nativeLibraryDir）
+            # nativeLibraryDir 是 Android 上唯一可靠的可执行目录（W^X 策略下 filesDir 不可执行）
+            mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI"
+            cp katago "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI/libkatago.so"
+            # 同时保留一份在 assets 作为备份
             mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI"
             cp katago "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI/katago"
-            ls -lh "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI/katago"
+            ls -lh "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI/libkatago.so"
             cd "$GITHUB_WORKSPACE"
           done
 

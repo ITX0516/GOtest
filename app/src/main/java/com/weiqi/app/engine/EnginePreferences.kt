@@ -185,14 +185,22 @@ class EnginePreferences(context: Context) {
     /**
      * 解析 KataGo 引擎可执行文件的最终路径，按优先级：
      * 1. 用户自定义路径
-     * 2. 从 assets 解压到 filesDir/bin/ 的
-     * 3. 扫描公共目录
-     * 4. 都不存在则返回空字符串
+     * 2. nativeLibraryDir/libkatago.so（jniLibs 打包，Android 10+ W^X 策略下唯一可靠）
+     * 3. 从 assets 解压到 filesDir/bin/ 的（Android 9 及以下回退）
+     * 4. 扫描公共目录
+     * 5. 都不存在则返回空字符串
      */
     fun resolveKataGoBinaryPath(): String {
         val custom = getKataGoBinaryPath()
         if (custom.isNotBlank() && File(custom).exists() && File(custom).canExecute()) {
             return custom
+        }
+
+        // nativeLibraryDir（jniLibs 打包的 libkatago.so）
+        val nativeDir = appContext.applicationInfo.nativeLibraryDir
+        val nativeFile = File(nativeDir, "libkatago.so")
+        if (nativeFile.exists() && nativeFile.canExecute()) {
+            return nativeFile.absolutePath
         }
 
         val extracted = File(getBinDir(), "katago")
@@ -229,6 +237,13 @@ class EnginePreferences(context: Context) {
         val custom = getLeelaBinaryPath()
         if (custom.isNotBlank() && File(custom).exists() && File(custom).canExecute()) {
             return custom
+        }
+
+        // nativeLibraryDir
+        val nativeDir = appContext.applicationInfo.nativeLibraryDir
+        val nativeFile = File(nativeDir, "libleelaz.so")
+        if (nativeFile.exists() && nativeFile.canExecute()) {
+            return nativeFile.absolutePath
         }
 
         val extracted = File(getBinDir(), "leelaz")

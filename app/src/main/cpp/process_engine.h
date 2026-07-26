@@ -102,6 +102,9 @@ private:
     std::string responseBuffer_;
     bool inResponse_ = false;
     bool responseIsError_ = false;
+
+    // execvp 失败时的错误信息
+    std::string lastError_;
 };
 
 } // namespace weiqi

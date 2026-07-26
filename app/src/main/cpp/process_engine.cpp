@@ -51,8 +51,28 @@ bool ProcessGtpEngine::start() {
         readThread_ = std::thread([this]() { readLoop(); });
     }
 
-    // 等待一小段时间让引擎初始化（不在锁内）
+    // 等待引擎初始化（不在锁内）
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+    // 检查子进程是否还活着（可能启动后立即崩溃）
+    if (childPid_ > 0) {
+        int status = 0;
+        pid_t result = waitpid(childPid_, &status, WNOHANG);
+        if (result != 0) {
+            // 子进程已退出
+            running_.store(false);
+            childPid_ = -1;
+            if (WIFEXITED(status)) {
+                lastError_ = "引擎启动后立即退出 (exit code=" +
+                             std::to_string(WEXITSTATUS(status)) + ")";
+            } else if (WIFSIGNALED(status)) {
+                lastError_ = "引擎被信号终止 (signal=" +
+                             std::to_string(WTERMSIG(status)) + ")";
+            }
+            LOGE("engine died immediately: %s", lastError_.c_str());
+            return false;
+        }
+    }
 
     // 查询版本（sendCommand 内部会抢锁，所以必须在锁外调用）
     queryVersionAfterStart();
@@ -117,31 +137,37 @@ bool ProcessGtpEngine::isReady() const {
 bool ProcessGtpEngine::spawnProcess() {
     int stdinPipe[2];   // [0]=读(子进程), [1]=写(父)
     int stdoutPipe[2];  // [0]=读(父), [1]=写(子进程)
+    int execErrPipe[2]; // 用于检测 execvp 是否失败
 
-    if (pipe(stdinPipe) != 0 || pipe(stdoutPipe) != 0) {
+    if (pipe(stdinPipe) != 0 || pipe(stdoutPipe) != 0 || pipe(execErrPipe) != 0) {
         LOGE("pipe() failed: %s", strerror(errno));
         return false;
     }
+
+    // 设置 execErrPipe 写端为 close-on-exec
+    // execvp 成功时该 fd 自动关闭，父进程读到 EOF；失败时子进程写入 errno
+    fcntl(execErrPipe[1], F_SETFD, FD_CLOEXEC);
 
     pid_t pid = fork();
     if (pid < 0) {
         LOGE("fork() failed: %s", strerror(errno));
         close(stdinPipe[0]); close(stdinPipe[1]);
         close(stdoutPipe[0]); close(stdoutPipe[1]);
+        close(execErrPipe[0]); close(execErrPipe[1]);
         return false;
     }
 
     if (pid == 0) {
         // ===== 子进程 =====
-        // 重定向 stdin / stdout
+        // 重定向 stdin / stdout / stderr
         dup2(stdinPipe[0], STDIN_FILENO);
         dup2(stdoutPipe[1], STDOUT_FILENO);
-        // stderr 也重定向到 stdout 方便日志收集
         dup2(stdoutPipe[1], STDERR_FILENO);
 
         // 关闭不需要的 pipe 端
         close(stdinPipe[0]); close(stdinPipe[1]);
         close(stdoutPipe[0]); close(stdoutPipe[1]);
+        // execErrPipe[0] 已在父进程关闭，execErrPipe[1] 设了 CLOEXEC
 
         // 切换工作目录
         if (!workingDir_.empty()) {
@@ -161,7 +187,9 @@ bool ProcessGtpEngine::spawnProcess() {
 
         execvp(executablePath_.c_str(), const_cast<char* const*>(argv.data()));
 
-        // execvp 失败
+        // execvp 失败：写入 errno 让父进程知道
+        int err = errno;
+        write(execErrPipe[1], &err, sizeof(err));
         _exit(127);
     }
 
@@ -173,6 +201,28 @@ bool ProcessGtpEngine::spawnProcess() {
     // 关闭子进程端
     close(stdinPipe[0]);
     close(stdoutPipe[1]);
+    close(execErrPipe[1]);
+
+    // 检测 execvp 是否成功：读 execErrPipe[0]
+    // 如果 execvp 成功，fd 被 CLOEXEC 关闭，read 返回 0 (EOF)
+    // 如果 execvp 失败，子进程写入了 errno，read 返回 sizeof(int)
+    int execErrno = 0;
+    ssize_t errRead = read(execErrPipe[0], &execErrno, sizeof(execErrno));
+    close(execErrPipe[0]);
+
+    if (errRead > 0) {
+        // execvp 失败
+        LOGE("execvp(%s) failed: %s", executablePath_.c_str(), strerror(execErrno));
+        // 回收子进程
+        int status = 0;
+        waitpid(pid, &status, 0);
+        childPid_ = -1;
+        stdinFd_ = -1;
+        stdoutFd_ = -1;
+        lastError_ = std::string("无法启动引擎: ") + strerror(execErrno) +
+                     " (路径: " + executablePath_ + ")";
+        return false;
+    }
 
     // 设置为非阻塞读，避免读取线程卡死
     int flags = fcntl(stdoutFd_, F_GETFL, 0);
@@ -209,7 +259,14 @@ std::string ProcessGtpEngine::sendCommand(const std::string& command,
     std::string cmdWithNewline = command + "\n";
     ssize_t written = write(stdinFd_, cmdWithNewline.c_str(), cmdWithNewline.size());
     if (written < 0) {
-        errorMessage = std::string("write failed: ") + strerror(errno);
+        // Broken pipe = 子进程已退出
+        if (errno == EPIPE) {
+            errorMessage = "引擎已退出（Broken pipe）。" +
+                          (lastError_.empty() ? std::string("可能原因：二进制路径不可执行(W^X)、权重文件缺失、配置文件错误") : lastError_);
+        } else {
+            errorMessage = std::string("write failed: ") + strerror(errno);
+        }
+        running_.store(false);
         return "";
     }
     fsync(stdinFd_);
