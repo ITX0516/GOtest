@@ -83,7 +83,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
 
       - name: Download KataGo source (BUILTIN mode)
-        if: ${{ inputs.engine_mode == 'BUILTIN' }}
+        if: ${{ (inputs.engine_mode || 'BUILTIN') == 'BUILTIN' }}
         run: |
           chmod +x ./tools/download_katago_source.sh
           if [ -d "app/src/main/cpp/third_party/katago/cpp" ]; then
@@ -95,7 +95,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Ensure Eigen headers (BUILTIN mode)
-        if: ${{ inputs.engine_mode == 'BUILTIN' }}
+        if: ${{ (inputs.engine_mode || 'BUILTIN') == 'BUILTIN' }}
         run: |
           KATAGO_DIR="app/src/main/cpp/third_party/katago"
           EIGEN_DIR="$KATAGO_DIR/cpp/external/eigen"
