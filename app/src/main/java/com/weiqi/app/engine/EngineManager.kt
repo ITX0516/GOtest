@@ -19,10 +19,16 @@ import java.io.IOException
  *
  * 负责：
  * - 根据用户偏好创建/启动/切换/停止 [GoEngine]
- * - 从 assets 解压权重文件到 filesDir/weights/
+ * - 从 assets 解压权重/二进制文件（仅作为备选，主要靠用户自定义路径）
+ * - 自动扫描设备公共目录（Download / WeiqiApp/）查找权重与引擎文件
  * - 检测设备是否支持某引擎（ABI + 可用内存）
  *
  * 线程安全：内部使用 [Mutex] 串行化引擎生命周期操作。
+ *
+ * 文件路径优先级（从高到低）：
+ * 1. 用户在设置页自定义的路径
+ * 2. 从 assets 解压到 filesDir 的副本
+ * 3. 自动扫描公共目录（/sdcard/Download/、/sdcard/WeiqiApp/weights/ 等）
  *
  * @param context 应用上下文。
  * @param preferences 引擎偏好设置。
@@ -82,8 +88,10 @@ class EngineManager(
 
     /**
      * 从 assets 复制权重文件到 `filesDir/weights/`，已存在则跳过。
+     * 仅作为备选方案；推荐用户通过设置页自定义路径。
+     *
      * @param engineType 引擎类型（KATAGO / LEELAZERO）。
-     * @return 目标权重文件绝对路径。
+     * @return 目标权重文件绝对路径；assets 中无对应文件则返回空字符串（不抛异常）。
      */
     suspend fun ensureWeightsExtracted(engineType: EngineType): String = withContext(Dispatchers.IO) {
         val assetName = when (engineType) {
@@ -100,12 +108,8 @@ class EngineManager(
                 appContext.assets.open(assetName).use { input ->
                     destFile.outputStream().use { output -> input.copyTo(output) }
                 }
-            } catch (e: IOException) {
-                throw EngineException(
-                    "权重文件未找到：assets/$assetName。" +
-                        "请下载 ${engineType.displayName} 权重并放到 app/src/main/assets/weights/ 下。",
-                    e
-                )
+            } catch (_: IOException) {
+                return@withContext ""
             }
         }
         destFile.absolutePath
@@ -113,10 +117,10 @@ class EngineManager(
 
     /**
      * 从 assets 复制引擎可执行文件到 `filesDir/bin/`，已存在则跳过，并设置可执行权限。
-     * PROCESS 模式（子进程方式）需要引擎可执行文件（katago / leelaz）。
+     * 仅作为备选方案。
      *
      * @param engineType 引擎类型（KATAGO / LEELAZERO）。
-     * @return 目标可执行文件绝对路径；失败时抛出 [EngineException]。
+     * @return 目标可执行文件绝对路径；assets 中无对应文件则返回空字符串（不抛异常）。
      */
     suspend fun ensureBinaryExtracted(engineType: EngineType): String = withContext(Dispatchers.IO) {
         val (assetName, binaryName) = when (engineType) {
@@ -134,12 +138,8 @@ class EngineManager(
                     destFile.outputStream().use { output -> input.copyTo(output) }
                 }
                 destFile.setExecutable(true, false)
-            } catch (e: IOException) {
-                throw EngineException(
-                    "引擎可执行文件未找到：assets/$assetName。" +
-                        "请编译 ${engineType.displayName} 并放到 app/src/main/assets/bin/ 下。",
-                    e
-                )
+            } catch (_: IOException) {
+                return@withContext ""
             }
         } else {
             if (!destFile.canExecute()) {
@@ -151,7 +151,6 @@ class EngineManager(
 
     /**
      * 从 assets 复制引擎配置文件到 `filesDir/config/`，已存在则跳过。
-     * KataGo 支持可选的 .cfg 配置文件。
      *
      * @param assetName 配置文件在 assets 中的路径。
      * @return 目标配置文件绝对路径；文件不存在则返回空字符串。
@@ -167,7 +166,7 @@ class EngineManager(
                 appContext.assets.open(assetName).use { input ->
                     destFile.outputStream().use { output -> input.copyTo(output) }
                 }
-            } catch (e: IOException) {
+            } catch (_: IOException) {
                 return@withContext ""
             }
         }
@@ -204,12 +203,18 @@ class EngineManager(
         }
         val engine: GoEngine = when (type) {
             EngineType.KATAGO -> {
-                val weights = try { ensureWeightsExtracted(type) } catch (e: EngineException) { "" }
-                val binaryPath = try { ensureBinaryExtracted(type) } catch (e: EngineException) { "" }
-                val configPath = try { ensureConfigExtracted(EnginePreferences.ASSET_KATAGO_CONFIG) } catch (_: Exception) { "" }
+                // 1. 先尝试从 assets 解压（备用方案，asset 若无文件则静默返回空）
+                ensureWeightsExtracted(type)
+                ensureBinaryExtracted(type)
+                // 2. 使用 EnginePreferences 的优先级解析：用户路径 > assets > 公共扫描
+                val weightsPath = preferences.resolveKataGoWeightsPath()
+                val binaryPath = preferences.resolveKataGoBinaryPath()
+                val configPath = preferences.getKataGoConfigPath().ifBlank {
+                    try { ensureConfigExtracted(EnginePreferences.ASSET_KATAGO_CONFIG) } catch (_: Exception) { "" }
+                }
                 val workingDir = File(appContext.filesDir, "bin").absolutePath
                 val cfg = preferences.getKataGoConfig().copy(
-                    weightsPath = weights,
+                    weightsPath = weightsPath,
                     executablePath = binaryPath,
                     configPath = configPath,
                     workingDir = workingDir
@@ -217,11 +222,13 @@ class EngineManager(
                 KataGoEngine(cfg)
             }
             EngineType.LEELAZERO -> {
-                val weights = try { ensureWeightsExtracted(type) } catch (e: EngineException) { "" }
-                val binaryPath = try { ensureBinaryExtracted(type) } catch (e: EngineException) { "" }
+                ensureWeightsExtracted(type)
+                ensureBinaryExtracted(type)
+                val weightsPath = preferences.resolveLeelaWeightsPath()
+                val binaryPath = preferences.resolveLeelaBinaryPath()
                 val workingDir = File(appContext.filesDir, "bin").absolutePath
                 val cfg = preferences.getLeelaZeroConfig().copy(
-                    weightsPath = weights,
+                    weightsPath = weightsPath,
                     executablePath = binaryPath,
                     workingDir = workingDir
                 )

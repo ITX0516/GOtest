@@ -64,11 +64,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download weights (b18)
-        run: |
-          chmod +x ./tools/download_weights.sh
-          ./tools/download_weights.sh --size b18
-
       - name: Set BUILTIN engine mode
         run: |
           sed -i "s/-DWEIQI_ENGINE_MODE=[A-Z]*/-DWEIQI_ENGINE_MODE=BUILTIN/" app/build.gradle.kts
@@ -118,17 +113,21 @@ jobs:
             ## 围棋 AI App v${{ steps.get_version.outputs.version }}
 
             ### 特性
-            - KataGo 引擎内置（BUILTIN 模式，b18c384nbt 权重）
-            - 业余 5-6 段棋力
+            - KataGo 引擎支持（BUILTIN 模式）
             - 对弈模式 + 分析模式
             - SGF 导入导出
             - 远程算力支持
             - 多种棋盘棋子主题
 
+            ### 使用说明
+            > 本 APK 不含权重文件，请自行下载并配置：
+            > 1. 下载 KataGo 权重: https://katagotraining.org/networks/
+            > 2. 进入 App 设置页，选择下载好的权重文件
+            > 3. 如需 PROCESS 模式，还需选择 katago 引擎可执行文件
+
             ### 引擎配置
             - 引擎模式: BUILTIN
             - KataGo 版本: v1.16.4
-            - 权重: b18c384nbt
             - CPU-only 模式
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

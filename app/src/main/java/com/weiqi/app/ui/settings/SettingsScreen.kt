@@ -1,5 +1,8 @@
 package com.weiqi.app.ui.settings
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -9,11 +12,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -22,6 +32,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -35,18 +46,19 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.weiqi.app.engine.EngineConfig
 import com.weiqi.app.engine.EngineType
 import com.weiqi.app.ui.theme.BoardTheme
 import com.weiqi.app.ui.theme.StoneTheme
+import java.io.File
 
 /**
- * 设置界面：引擎选择 / 各引擎参数 / 远程算力 / 主题 / 音效。
- *
- * 竖屏单列滚动；横屏布局同样适用（未做强制分栏，可后续增强）。
+ * 设置界面：引擎选择 / 各引擎参数 / 自定义权重与引擎路径 / 远程算力 / 主题 / 音效。
  */
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -58,6 +70,49 @@ fun SettingsScreen(
     val state by viewModel.settingsState.collectAsStateWithLifecycle()
     val supported by viewModel.deviceSupported.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // ===== 文件选择器 launcher =====
+    // 使用 OpenDocument 以便跨 Android 版本兼容
+
+    // KataGo 权重文件选择器 (.bin.gz / .txt.gz)
+    val katagoWeightsPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = SettingsViewModel.resolveFilePath(it)
+            viewModel.onKataGoWeightsFileSelected(it, path)
+        }
+    }
+
+    // KataGo 引擎二进制文件选择器
+    val katagoBinaryPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = SettingsViewModel.resolveFilePath(it)
+            viewModel.onKataGoBinaryFileSelected(it, path)
+        }
+    }
+
+    // LeelaZero 权重文件选择器
+    val leelaWeightsPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = SettingsViewModel.resolveFilePath(it)
+            viewModel.onLeelaWeightsFileSelected(it, path)
+        }
+    }
+
+    // LeelaZero 引擎二进制文件选择器
+    val leelaBinaryPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            val path = SettingsViewModel.resolveFilePath(it)
+            viewModel.onLeelaBinaryFileSelected(it, path)
+        }
+    }
 
     LaunchedEffect(state.lastError) {
         state.lastError?.let {
@@ -100,11 +155,23 @@ fun SettingsScreen(
             when (state.currentEngine) {
                 EngineType.KATAGO -> KataGoConfigSection(
                     config = state.katagoConfig,
-                    onUpdate = viewModel::updateKataGoConfig
+                    weightsPath = state.katagoWeightsPath,
+                    binaryPath = state.katagoBinaryPath,
+                    onUpdate = viewModel::updateKataGoConfig,
+                    onSelectWeights = { katagoWeightsPicker.launch(arrayOf("*/*")) },
+                    onSelectBinary = { katagoBinaryPicker.launch(arrayOf("*/*")) },
+                    onClearWeights = viewModel::clearKataGoWeightsPath,
+                    onClearBinary = viewModel::clearKataGoBinaryPath
                 )
                 EngineType.LEELAZERO -> LeelaConfigSection(
                     config = state.leelaConfig,
-                    onUpdate = viewModel::updateLeelaConfig
+                    weightsPath = state.leelaWeightsPath,
+                    binaryPath = state.leelaBinaryPath,
+                    onUpdate = viewModel::updateLeelaConfig,
+                    onSelectWeights = { leelaWeightsPicker.launch(arrayOf("*/*")) },
+                    onSelectBinary = { leelaBinaryPicker.launch(arrayOf("*/*")) },
+                    onClearWeights = viewModel::clearLeelaWeightsPath,
+                    onClearBinary = viewModel::clearLeelaBinaryPath
                 )
                 EngineType.REMOTE -> RemoteConfigSection(
                     config = state.remoteConfig,
@@ -182,9 +249,35 @@ private fun EngineSection(
 @Composable
 private fun KataGoConfigSection(
     config: EngineConfig,
-    onUpdate: (EngineConfig) -> Unit
+    weightsPath: String,
+    binaryPath: String,
+    onUpdate: (EngineConfig) -> Unit,
+    onSelectWeights: () -> Unit,
+    onSelectBinary: () -> Unit,
+    onClearWeights: () -> Unit,
+    onClearBinary: () -> Unit
 ) {
     ConfigCard("KataGo 参数") {
+        // --- 权重文件选择 ---
+        FilePathRow(
+            label = "权重文件",
+            description = "从 katagotraining.org 下载 .bin.gz 权重",
+            path = weightsPath,
+            onSelect = onSelectWeights,
+            onClear = onClearWeights
+        )
+
+        // --- 引擎二进制文件选择 ---
+        FilePathRow(
+            label = "引擎二进制文件",
+            description = "katago 可执行文件（PROCESS 模式需要）",
+            path = binaryPath,
+            onSelect = onSelectBinary,
+            onClear = onClearBinary
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
         NumberField(
             label = "线程数",
             value = config.threads,
@@ -211,9 +304,33 @@ private fun KataGoConfigSection(
 @Composable
 private fun LeelaConfigSection(
     config: EngineConfig,
-    onUpdate: (EngineConfig) -> Unit
+    weightsPath: String,
+    binaryPath: String,
+    onUpdate: (EngineConfig) -> Unit,
+    onSelectWeights: () -> Unit,
+    onSelectBinary: () -> Unit,
+    onClearWeights: () -> Unit,
+    onClearBinary: () -> Unit
 ) {
     ConfigCard("LeelaZero 参数") {
+        FilePathRow(
+            label = "权重文件",
+            description = "LeelaZero 权重（.txt.gz）",
+            path = weightsPath,
+            onSelect = onSelectWeights,
+            onClear = onClearWeights
+        )
+
+        FilePathRow(
+            label = "引擎二进制文件",
+            description = "leelaz 可执行文件（PROCESS 模式需要）",
+            path = binaryPath,
+            onSelect = onSelectBinary,
+            onClear = onClearBinary
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
         NumberField(
             label = "线程数",
             value = config.threads,
@@ -229,6 +346,107 @@ private fun LeelaConfigSection(
             checked = config.cpuOnly,
             onChange = { onUpdate(config.copy(cpuOnly = it)) }
         )
+    }
+}
+
+/**
+ * 文件路径选择行：显示当前路径状态 + 选择按钮 + 清除按钮。
+ */
+@Composable
+private fun FilePathRow(
+    label: String,
+    description: String,
+    path: String,
+    onSelect: () -> Unit,
+    onClear: () -> Unit
+) {
+    val hasFile = path.isNotBlank()
+    val fileExists = hasFile && File(path).exists()
+
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // 状态图标
+            when {
+                !hasFile -> {
+                    Icon(
+                        Icons.Filled.Warning,
+                        contentDescription = "未设置",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        "未设置 — $description",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                !fileExists -> {
+                    Icon(
+                        Icons.Filled.Warning,
+                        contentDescription = "文件不存在",
+                        tint = Color(0xFFFFA000),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        "文件不存在: ${File(path).name}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFFFA000),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                else -> {
+                    Icon(
+                        Icons.Filled.CheckCircle,
+                        contentDescription = "已就绪",
+                        tint = Color(0xFF4CAF50),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        File(path).name,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF4CAF50),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            OutlinedButton(
+                onClick = onSelect,
+                modifier = Modifier.height(32.dp)
+            ) {
+                Icon(
+                    Icons.Filled.FolderOpen,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text("选择", style = MaterialTheme.typography.labelSmall)
+            }
+
+            if (hasFile) {
+                IconButton(
+                    onClick = onClear,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "清除",
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -23,16 +23,6 @@ on:
           - BUILTIN
           - PROCESS
           - DYLIB
-      weight_size:
-        description: 'KataGo weight size'
-        required: false
-        default: 'none'
-        type: choice
-        options:
-          - b10
-          - b18
-          - b28
-          - none
       build_type:
         description: 'Build type'
         required: false
@@ -126,12 +116,6 @@ jobs:
           else
             echo "Eigen headers found at $EIGEN_DIR"
           fi
-
-      - name: Download weights
-        if: ${{ inputs.weight_size != 'none' && inputs.engine_mode != 'STUB' }}
-        run: |
-          chmod +x ./tools/download_weights.sh
-          ./tools/download_weights.sh --size ${{ inputs.weight_size || 'b18' }}
 
       - name: Set engine mode in build.gradle.kts
         run: |

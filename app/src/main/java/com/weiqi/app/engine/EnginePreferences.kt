@@ -1,6 +1,7 @@
 package com.weiqi.app.engine
 
 import android.content.Context
+import android.os.Environment
 import java.io.File
 
 /**
@@ -8,21 +9,16 @@ import java.io.File
  *
  * 基于 SharedPreferences 存储：
  * - 当前选中引擎类型
+ * - 用户自定义权重/引擎二进制/配置文件路径
  * - KataGo / LeelaZero / 远程引擎的 [EngineConfig]
  *
- * 真实权重文件说明（用户需自行下载）：
- * - KataGo b18c384 约 40MB，放置于 `app/src/main/assets/weights/katago_b18c384.bin.gz`
- * - LeelaZero b18c384 约 50MB，放置于 `app/src/main/assets/weights/leelaz_b18c384.txt.gz`
+ * 权重与引擎文件由用户自行下载（浏览器下载），放到设备存储后，
+ * 在设置页通过文件选择器指定路径。
  *
- * 真实引擎 .so 说明（用户需自行编译或下载）：
- * - `libkatago.so` / `libleelaz.so` 放置于 `app/src/main/jniLibs/<abi>/`
- *   （`<abi>` 为 `arm64-v8a` / `x86_64` 等）
- * - 并在 `app/src/main/cpp/CMakeLists.txt` 中开启
- *   `-DWEIQI_LINK_KATAGO=ON` / `-DWEIQI_LINK_LEELAZERO=ON`，
- *   设置 `KATAGO_LIB_DIR` / `LEELAZERO_LIB_DIR` 指向 .so 所在目录
- *
- * Stub 模式（默认）：未链接真实引擎时，C++ 端构建桩实现，
- * genmove 返回随机合法点或 pass，仅用于 UI 调试。
+ * 公共扫描目录（引擎启动时自动查找）：
+ * - /sdcard/Download/         浏览器默认下载目录
+ * - /sdcard/WeiqiApp/weights/  推荐权重存放目录
+ * - /sdcard/WeiqiApp/bin/      推荐引擎可执行文件目录
  *
  * @param context 应用上下文。
  */
@@ -40,6 +36,53 @@ class EnginePreferences(context: Context) {
     /** 设置当前选中的引擎类型。 */
     fun setCurrentEngineType(type: EngineType) {
         prefs.edit().putString(KEY_CURRENT_ENGINE, type.name).apply()
+    }
+
+    // ===== 用户自定义文件路径 =====
+
+    /** 获取用户设置的 KataGo 权重文件路径。 */
+    fun getKataGoWeightsPath(): String =
+        prefs.getString(KEY_KATAGO_WEIGHTS_PATH, "") ?: ""
+
+    /** 设置用户选择的 KataGo 权重文件路径。 */
+    fun setKataGoWeightsPath(path: String) {
+        prefs.edit().putString(KEY_KATAGO_WEIGHTS_PATH, path).apply()
+    }
+
+    /** 获取用户设置的 KataGo 引擎可执行文件路径（PROCESS 模式用）。 */
+    fun getKataGoBinaryPath(): String =
+        prefs.getString(KEY_KATAGO_BINARY_PATH, "") ?: ""
+
+    /** 设置用户选择的 KataGo 引擎可执行文件路径。 */
+    fun setKataGoBinaryPath(path: String) {
+        prefs.edit().putString(KEY_KATAGO_BINARY_PATH, path).apply()
+    }
+
+    /** 获取用户设置的 KataGo 配置文件路径（可选）。 */
+    fun getKataGoConfigPath(): String =
+        prefs.getString(KEY_KATAGO_CONFIG_PATH, "") ?: ""
+
+    /** 设置用户选择的 KataGo 配置文件路径。 */
+    fun setKataGoConfigPath(path: String) {
+        prefs.edit().putString(KEY_KATAGO_CONFIG_PATH, path).apply()
+    }
+
+    /** 获取用户设置的 LeelaZero 权重文件路径。 */
+    fun getLeelaWeightsPath(): String =
+        prefs.getString(KEY_LEELA_WEIGHTS_PATH, "") ?: ""
+
+    /** 设置用户选择的 LeelaZero 权重文件路径。 */
+    fun setLeelaWeightsPath(path: String) {
+        prefs.edit().putString(KEY_LEELA_WEIGHTS_PATH, path).apply()
+    }
+
+    /** 获取用户设置的 LeelaZero 引擎可执行文件路径（PROCESS 模式用）。 */
+    fun getLeelaBinaryPath(): String =
+        prefs.getString(KEY_LEELA_BINARY_PATH, "") ?: ""
+
+    /** 设置用户选择的 LeelaZero 引擎可执行文件路径。 */
+    fun setLeelaBinaryPath(path: String) {
+        prefs.edit().putString(KEY_LEELA_BINARY_PATH, path).apply()
     }
 
     /** 获取 KataGo 配置；未设置时返回默认配置。 */
@@ -80,12 +123,167 @@ class EnginePreferences(context: Context) {
 
     /**
      * 获取权重文件目录（`filesDir/weights/`），不存在则创建。
-     * 引擎启动前由 [EngineManager.ensureWeightsExtracted] 解压/复制到这里。
      */
     fun getWeightsDir(): File {
         val dir = File(appContext.filesDir, "weights")
         if (!dir.exists()) dir.mkdirs()
         return dir
+    }
+
+    /**
+     * 获取引擎二进制目录（`filesDir/bin/`），不存在则创建。
+     */
+    fun getBinDir(): File {
+        val dir = File(appContext.filesDir, "bin")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    /**
+     * 获取推荐权重存放目录（/sdcard/WeiqiApp/weights/）。
+     */
+    fun getRecommendedWeightsDir(): File {
+        val dir = File(Environment.getExternalStorageDirectory(), "WeiqiApp/weights")
+        return dir
+    }
+
+    /**
+     * 推荐引擎可执行文件存放目录（/sdcard/WeiqiApp/bin/）。
+     */
+    fun getRecommendedBinDir(): File {
+        val dir = File(Environment.getExternalStorageDirectory(), "WeiqiApp/bin")
+        return dir
+    }
+
+    // ===== 解析最佳可用路径 =====
+
+    /**
+     * 解析 KataGo 权重文件的最终路径，按优先级：
+     * 1. 用户自定义路径（设置页选择的）
+     * 2. 从 assets 解压到 filesDir/weights/ 的
+     * 3. 扫描公共目录（Download / WeiqiApp/weights/）
+     * 4. 都不存在则返回空字符串
+     */
+    fun resolveKataGoWeightsPath(): String {
+        // 1. 用户自定义路径
+        val custom = getKataGoWeightsPath()
+        if (custom.isNotBlank() && File(custom).exists() && File(custom).canRead()) {
+            return custom
+        }
+
+        // 2. assets 解压路径
+        val extracted = File(getWeightsDir(), ASSET_KATAGO_WEIGHTS.substringAfterLast('/'))
+        if (extracted.exists() && extracted.length() > 0) {
+            return extracted.absolutePath
+        }
+
+        // 3. 扫描公共目录
+        val found = findWeightFile(KATAGO_WEIGHT_PATTERNS)
+        return found?.absolutePath ?: ""
+    }
+
+    /**
+     * 解析 KataGo 引擎可执行文件的最终路径，按优先级：
+     * 1. 用户自定义路径
+     * 2. 从 assets 解压到 filesDir/bin/ 的
+     * 3. 扫描公共目录
+     * 4. 都不存在则返回空字符串
+     */
+    fun resolveKataGoBinaryPath(): String {
+        val custom = getKataGoBinaryPath()
+        if (custom.isNotBlank() && File(custom).exists() && File(custom).canExecute()) {
+            return custom
+        }
+
+        val extracted = File(getBinDir(), "katago")
+        if (extracted.exists() && extracted.canExecute()) {
+            return extracted.absolutePath
+        }
+
+        val found = findBinaryFile("katago")
+        return found?.absolutePath ?: ""
+    }
+
+    /**
+     * 解析 LeelaZero 权重文件的最终路径。
+     */
+    fun resolveLeelaWeightsPath(): String {
+        val custom = getLeelaWeightsPath()
+        if (custom.isNotBlank() && File(custom).exists() && File(custom).canRead()) {
+            return custom
+        }
+
+        val extracted = File(getWeightsDir(), ASSET_LEELA_WEIGHTS.substringAfterLast('/'))
+        if (extracted.exists() && extracted.length() > 0) {
+            return extracted.absolutePath
+        }
+
+        val found = findWeightFile(LEELA_WEIGHT_PATTERNS)
+        return found?.absolutePath ?: ""
+    }
+
+    /**
+     * 解析 LeelaZero 引擎可执行文件的最终路径。
+     */
+    fun resolveLeelaBinaryPath(): String {
+        val custom = getLeelaBinaryPath()
+        if (custom.isNotBlank() && File(custom).exists() && File(custom).canExecute()) {
+            return custom
+        }
+
+        val extracted = File(getBinDir(), "leelaz")
+        if (extracted.exists() && extracted.canExecute()) {
+            return extracted.absolutePath
+        }
+
+        val found = findBinaryFile("leelaz")
+        return found?.absolutePath ?: ""
+    }
+
+    /**
+     * 扫描公共目录查找匹配的权重文件。
+     * @param patterns 文件名模式列表（如 ["katago", ".bin.gz"]）。
+     */
+    private fun findWeightFile(patterns: List<String>): File? {
+        val scanDirs = listOf(
+            File(Environment.getExternalStorageDirectory(), "Download"),
+            getRecommendedWeightsDir(),
+            File(Environment.getExternalStorageDirectory(), "Documents"),
+        )
+        for (dir in scanDirs) {
+            if (!dir.exists() || !dir.isDirectory) continue
+            val files = dir.listFiles() ?: continue
+            for (file in files) {
+                if (!file.isFile) continue
+                val name = file.name.lowercase()
+                if (patterns.all { name.contains(it.lowercase()) }) {
+                    return file
+                }
+            }
+        }
+        return null
+    }
+
+    /**
+     * 扫描公共目录查找引擎可执行文件。
+     * @param binaryName 可执行文件名称（"katago" / "leelaz"）。
+     */
+    private fun findBinaryFile(binaryName: String): File? {
+        val scanDirs = listOf(
+            getRecommendedBinDir(),
+            File(Environment.getExternalStorageDirectory(), "Download"),
+        )
+        for (dir in scanDirs) {
+            if (!dir.exists() || !dir.isDirectory) continue
+            val file = File(dir, binaryName)
+            if (file.exists() && file.isFile) return file
+            // 也检查带后缀的（如 katago.bin）
+            val files = dir.listFiles() ?: continue
+            for (f in files) {
+                if (f.isFile && f.name.startsWith(binaryName)) return f
+            }
+        }
+        return null
     }
 
     private fun defaultKataGoConfig(): EngineConfig = EngineConfig(
@@ -130,6 +328,13 @@ class EnginePreferences(context: Context) {
         private const val KEY_LEELA_CONFIG = "leela_config"
         private const val KEY_REMOTE_CONFIG = "remote_config"
 
+        // 用户自定义路径键
+        private const val KEY_KATAGO_WEIGHTS_PATH = "katago_weights_path"
+        private const val KEY_KATAGO_BINARY_PATH = "katago_binary_path"
+        private const val KEY_KATAGO_CONFIG_PATH = "katago_config_path"
+        private const val KEY_LEELA_WEIGHTS_PATH = "leela_weights_path"
+        private const val KEY_LEELA_BINARY_PATH = "leela_binary_path"
+
         internal const val ASSET_KATAGO_WEIGHTS = "weights/katago_b18c384.bin.gz"
         internal const val ASSET_LEELA_WEIGHTS = "weights/leelaz_b18c384.txt.gz"
 
@@ -137,5 +342,9 @@ class EnginePreferences(context: Context) {
         internal const val ASSET_LEELA_BINARY = "bin/leelaz"
 
         internal const val ASSET_KATAGO_CONFIG = "config/katago_default.cfg"
+
+        /** KataGo 权重文件识别模式：文件名包含 "katago" 且以 .bin.gz 或 .txt.gz 结尾。 */
+        val KATAGO_WEIGHT_PATTERNS = listOf("katago", ".bin.gz")
+        val LEELA_WEIGHT_PATTERNS = listOf("leela", ".txt.gz")
     }
 }
