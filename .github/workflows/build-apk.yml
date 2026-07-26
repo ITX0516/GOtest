@@ -16,10 +16,9 @@ on:
       engine_mode:
         description: 'Engine integration mode'
         required: false
-        default: 'STUB'
+        default: 'BUILTIN'
         type: choice
         options:
-          - STUB
           - BUILTIN
           - PROCESS
           - DYLIB

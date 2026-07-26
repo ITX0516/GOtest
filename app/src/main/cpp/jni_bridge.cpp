@@ -1,11 +1,10 @@
 // jni_bridge.cpp
 // Kotlin NativeEngineBridge ↔ C++ GtpEngine 桥接实现。
 //
-// 支持四种集成模式（由 CMakeLists.txt 的 WEIQI_ENGINE_MODE 控制）：
-//   - STUB    : StubGtpEngine，桩实现，UI 调试用
+// 支持三种集成模式（由 CMakeLists.txt 的 WEIQI_ENGINE_MODE 控制）：
+//   - BUILTIN : BuiltinKataGoEngine，KataGo 源码直接编译进 .so（默认）
 //   - PROCESS : KataGoRealEngine / LeelazRealEngine，子进程 + GTP pipe
 //   - DYLIB   : DylibGtpEngine，dlopen 引擎 .so
-//   - BUILTIN : BuiltinKataGoEngine，KataGo 源码直接编译进 .so
 //
 // 实现的所有 native 方法（与 NativeEngineBridge.kt 一一对应）：
 //   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeCreateEngine
@@ -237,13 +236,11 @@ static std::unique_ptr<weiqi::GtpEngine> createEngineInstance(int engineType,
     }
     return std::make_unique<weiqi::DylibGtpEngine>(engineType, libPath, configJson);
 
-    // === STUB 模式（默认）：桩实现 ===
+    // 未知模式：返回空
 #else
     (void)configJson;
-    if (engineType != weiqi::kEngineKatago && engineType != weiqi::kEngineLeelazero) {
-        return nullptr;
-    }
-    return std::make_unique<weiqi::StubGtpEngine>(engineType);
+    (void)engineType;
+    return nullptr;
 #endif
 }
 
@@ -422,8 +419,8 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeIsEngineAvailable(
     }
     return JNI_FALSE;
 #else
-    // STUB 模式：始终可用
-    return JNI_TRUE;
+    // 未知模式：不可用
+    return JNI_FALSE;
 #endif
 }
 
