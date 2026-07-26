@@ -1,0 +1,213 @@
+# ==================================================================
+# 阿Q围棋 - dev 分支 APK 打包工作流
+# 触发方式:
+#   1. push 到 dev 分支时自动触发
+#   2. 手动触发 (workflow_dispatch) 可选引擎模式/构建类型
+# ==================================================================
+
+name: Build APK (dev)
+
+on:
+  push:
+    branches: [ dev ]
+    paths:
+      - 'app/**'
+      - 'tools/**'
+      - '.github/workflows/**'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle/**'
+  workflow_dispatch:
+    inputs:
+      engine_mode:
+        description: '引擎集成模式 (STUB=无需引擎,可直接打包)'
+        required: false
+        default: 'STUB'
+        type: choice
+        options:
+          - STUB
+          - BUILTIN
+          - PROCESS
+          - DYLIB
+      weight_size:
+        description: 'KataGo 权重尺寸 (仅 BUILTIN/PROCESS 模式需要)'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - b10
+          - b18
+          - b28
+      build_type:
+        description: '构建类型'
+        required: false
+        default: 'debug'
+        type: choice
+        options:
+          - debug
+          - release
+
+env:
+  JAVA_VERSION: '17'
+  ANDROID_COMPILE_SDK: '34'
+  ANDROID_BUILD_TOOLS: '34.0.0'
+  ANDROID_NDK_VERSION: '26.3.11579264'
+  CMAKE_VERSION: '3.22.1'
+  GRADLE_VERSION: '8.7'
+
+jobs:
+  build-apk:
+    name: Build APK (${{ inputs.engine_mode || 'STUB' }} / ${{ inputs.build_type || 'debug' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      # ---- 环境准备 ----
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Setup Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 11076708
+
+      - name: Install required SDK packages
+        run: |
+          sdkmanager "platforms;android-${{ env.ANDROID_COMPILE_SDK }}" || true
+          sdkmanager "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" || true
+          sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}" || true
+          sdkmanager "cmake;${{ env.CMAKE_VERSION }}" || true
+          sdkmanager --list_installed 2>/dev/null || sdkmanager --list 2>/dev/null | head -30
+
+      - name: Set ANDROID_NDK_HOME
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+
+      # ---- 引擎依赖 (仅 BUILTIN 模式需要) ----
+
+      - name: Download KataGo source (BUILTIN mode)
+        if: ${{ inputs.engine_mode == 'BUILTIN' }}
+        run: |
+          chmod +x ./tools/download_katago_source.sh
+          if [ -d "app/src/main/cpp/third_party/katago/cpp" ]; then
+            echo "KataGo source already exists, skipping."
+          else
+            yes "" | ./tools/download_katago_source.sh --branch v1.16.4
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ensure Eigen headers (BUILTIN mode)
+        if: ${{ inputs.engine_mode == 'BUILTIN' }}
+        run: |
+          KATAGO_DIR="app/src/main/cpp/third_party/katago"
+          EIGEN_DIR="$KATAGO_DIR/cpp/external/eigen"
+
+          if [ -d "$KATAGO_DIR/.git" ] || [ -f "$KATAGO_DIR/.git" ]; then
+            cd "$KATAGO_DIR"
+            git submodule update --init --recursive 2>/dev/null || true
+            cd -
+          fi
+
+          if [ ! -f "$EIGEN_DIR/Eigen/Core" ]; then
+            echo "Eigen not found, downloading..."
+            mkdir -p "$EIGEN_DIR"
+            curl -sL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz | \
+              tar xz -C "$EIGEN_DIR" --strip-components=1
+            echo "Eigen downloaded."
+          else
+            echo "Eigen headers found."
+          fi
+
+      - name: Download weights
+        if: ${{ inputs.weight_size != 'none' && inputs.engine_mode != 'STUB' }}
+        run: |
+          chmod +x ./tools/download_weights.sh
+          ./tools/download_weights.sh --size ${{ inputs.weight_size || 'b18' }}
+
+      # ---- 构建配置 ----
+
+      - name: Set engine mode in build.gradle.kts
+        run: |
+          ENGINE_MODE="${{ inputs.engine_mode || 'STUB' }}"
+          echo "Setting WEIQI_ENGINE_MODE=$ENGINE_MODE"
+          sed -i "s/-DWEIQI_ENGINE_MODE=[A-Z]*/-DWEIQI_ENGINE_MODE=$ENGINE_MODE/" app/build.gradle.kts
+          grep "WEIQI_ENGINE_MODE" app/build.gradle.kts
+
+      # ---- 生成 gradlew (仓库中缺少 gradlew 和 gradle-wrapper.jar) ----
+
+      - name: Generate gradlew wrapper
+        run: |
+          if [ ! -f gradlew ]; then
+            echo "gradlew not found, generating wrapper..."
+            gradle wrapper --gradle-version ${{ env.GRADLE_VERSION }}
+          fi
+          chmod +x gradlew
+          ls -la gradlew gradle/wrapper/
+
+      # ---- 编译 APK ----
+
+      - name: Build APK (${{ inputs.build_type || 'debug' }})
+        run: |
+          BUILD_TYPE="${{ inputs.build_type || 'debug' }}"
+          echo "Building $BUILD_TYPE APK ..."
+          if [ "$BUILD_TYPE" = "release" ]; then
+            ./gradlew assembleRelease --stacktrace --no-daemon
+          else
+            ./gradlew assembleDebug --stacktrace --no-daemon
+          fi
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+
+      # ---- 签名 (仅 release) ----
+
+      - name: Sign APK (release)
+        if: ${{ inputs.build_type == 'release' }}
+        uses: r0adkll/sign-android-release@v1
+        id: sign_apk
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.ANDROID_SIGNING_KEY }}
+          alias: ${{ secrets.ANDROID_KEY_ALIAS }}
+          keyStorePassword: ${{ secrets.ANDROID_KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        continue-on-error: true
+
+      # ---- 上传产物 ----
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weiqi-dev-${{ inputs.engine_mode || 'STUB' }}-${{ inputs.build_type || 'debug' }}
+          path: |
+            app/build/outputs/apk/**/*.apk
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Upload build reports (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/
+            app/build/outputs/
+          retention-days: 7
