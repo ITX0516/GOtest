@@ -124,8 +124,14 @@ class EngineManager(
      */
     suspend fun ensureBinaryExtracted(engineType: EngineType): String = withContext(Dispatchers.IO) {
         val (assetName, binaryName) = when (engineType) {
-            EngineType.KATAGO -> EnginePreferences.ASSET_KATAGO_BINARY to "katago"
-            EngineType.LEELAZERO -> EnginePreferences.ASSET_LEELA_BINARY to "leelaz"
+            EngineType.KATAGO -> {
+                val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+                "bin/$abi/katago" to "katago"
+            }
+            EngineType.LEELAZERO -> {
+                val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+                "bin/$abi/leelaz" to "leelaz"
+            }
             EngineType.REMOTE -> return@withContext ""
         }
         val destDir = File(appContext.filesDir, "bin")

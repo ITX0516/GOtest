@@ -16,10 +16,9 @@ on:
       engine_mode:
         description: 'Engine integration mode'
         required: false
-        default: 'BUILTIN'
+        default: 'PROCESS'
         type: choice
         options:
-          - BUILTIN
           - PROCESS
           - DYLIB
       build_type:
@@ -40,7 +39,7 @@ env:
 
 jobs:
   build-apk:
-    name: Build APK (${{ inputs.engine_mode || 'BUILTIN' }})
+    name: Build APK (${{ inputs.engine_mode || 'PROCESS' }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -70,73 +69,94 @@ jobs:
 
       - name: Install required SDK packages
         run: |
-          # 手动安装所需的 SDK 包，避免 packages 参数格式问题
           sdkmanager "platforms;android-${{ env.ANDROID_COMPILE_SDK }}" || true
           sdkmanager "build-tools;${{ env.ANDROID_BUILD_TOOLS }}" || true
           sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}" || true
           sdkmanager "cmake;${{ env.CMAKE_VERSION }}" || true
-          # 打印已安装的包
-          sdkmanager --list_installed 2>/dev/null || sdkmanager --list 2>/dev/null | head -30
 
       - name: Set ANDROID_NDK_HOME
-        run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
+        run: echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}" >> $GITHUB_ENV
 
-      - name: Download KataGo source (BUILTIN mode)
-        if: ${{ (inputs.engine_mode || 'BUILTIN') == 'BUILTIN' }}
+      - name: Download KataGo source
+        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
         run: |
           chmod +x ./tools/download_katago_source.sh
-          if [ -d "app/src/main/cpp/third_party/katago/cpp" ]; then
-            echo "KataGo source already exists, skipping download."
-          else
+          if [ ! -d "app/src/main/cpp/third_party/katago/cpp" ]; then
             yes "" | ./tools/download_katago_source.sh --branch v1.16.4
+          else
+            echo "KataGo source already exists."
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ensure Eigen headers (BUILTIN mode)
-        if: ${{ (inputs.engine_mode || 'BUILTIN') == 'BUILTIN' }}
+      - name: Ensure Eigen headers
+        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
         run: |
-          KATAGO_DIR="app/src/main/cpp/third_party/katago"
-          EIGEN_DIR="$KATAGO_DIR/cpp/external/eigen"
-          
-          if [ -d "$KATAGO_DIR/.git" ] || [ -f "$KATAGO_DIR/.git" ]; then
-            cd "$KATAGO_DIR"
-            git submodule update --init --recursive 2>/dev/null || true
-            cd -
-          fi
-          
+          EIGEN_DIR="app/src/main/cpp/third_party/katago/cpp/external/eigen"
           if [ ! -f "$EIGEN_DIR/Eigen/Core" ]; then
             echo "Eigen not found, downloading..."
             mkdir -p "$EIGEN_DIR"
             curl -sL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz | \
               tar xz -C "$EIGEN_DIR" --strip-components=1
-            echo "Eigen downloaded to $EIGEN_DIR"
           else
             echo "Eigen headers found at $EIGEN_DIR"
           fi
 
+      - name: Build kataGo binary for arm64-v8a
+        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
+        run: |
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+          KATAGO_SRC="app/src/main/cpp/third_party/katago/cpp"
+          mkdir -p build-katago/arm64-v8a
+          cd build-katago/arm64-v8a
+          cmake "$GITHUB_WORKSPACE/$KATAGO_SRC" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_CPU_ONLY=1 \
+            -DNO_GIT_REVISION=1 \
+            -DBUILD_TESTING=OFF
+          cmake --build . -j$(nproc) --target katago
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/bin/arm64-v8a"
+          cp katago "$GITHUB_WORKSPACE/app/src/main/assets/bin/arm64-v8a/katago"
+          ls -lh "$GITHUB_WORKSPACE/app/src/main/assets/bin/arm64-v8a/katago"
+
+      - name: Build kataGo binary for armeabi-v7a
+        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
+        run: |
+          NDK_TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
+          KATAGO_SRC="app/src/main/cpp/third_party/katago/cpp"
+          mkdir -p build-katago/armeabi-v7a
+          cd build-katago/armeabi-v7a
+          cmake "$GITHUB_WORKSPACE/$KATAGO_SRC" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
+            -DANDROID_ABI=armeabi-v7a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DUSE_CPU_ONLY=1 \
+            -DNO_GIT_REVISION=1 \
+            -DBUILD_TESTING=OFF
+          cmake --build . -j$(nproc) --target katago
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/bin/armeabi-v7a"
+          cp katago "$GITHUB_WORKSPACE/app/src/main/assets/bin/armeabi-v7a/katago"
+          ls -lh "$GITHUB_WORKSPACE/app/src/main/assets/bin/armeabi-v7a/katago"
+
       - name: Set engine mode in build.gradle.kts
         run: |
-          ENGINE_MODE="${{ inputs.engine_mode || 'BUILTIN' }}"
+          ENGINE_MODE="${{ inputs.engine_mode || 'PROCESS' }}"
           echo "Setting WEIQI_ENGINE_MODE=$ENGINE_MODE"
           sed -i "s/-DWEIQI_ENGINE_MODE=[A-Z]*/-DWEIQI_ENGINE_MODE=$ENGINE_MODE/" app/build.gradle.kts
-          echo "After sed:"
           grep "WEIQI_ENGINE_MODE" app/build.gradle.kts
 
       - name: Generate gradlew if missing
         run: |
-          if [ ! -f gradlew ]; then
-            echo "gradlew not found, generating..."
-            gradle wrapper --gradle-version 8.7
-          fi
+          if [ ! -f gradlew ]; then gradle wrapper --gradle-version 8.7; fi
           chmod +x gradlew
-          ls -la gradlew
 
       - name: Build APK (${{ inputs.build_type || 'debug' }})
         run: |
           BUILD_TYPE="${{ inputs.build_type || 'debug' }}"
-          echo "Building $BUILD_TYPE ..."
           if [ "$BUILD_TYPE" = "release" ]; then
             gradle assembleRelease --stacktrace --no-daemon
           else
@@ -161,9 +181,8 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: weiqi-app-${{ inputs.engine_mode || 'BUILTIN' }}-${{ inputs.build_type || 'debug' }}
-          path: |
-            app/build/outputs/apk/**/*.apk
+          name: weiqi-app-${{ inputs.engine_mode || 'PROCESS' }}-${{ inputs.build_type || 'debug' }}
+          path: app/build/outputs/apk/**/*.apk
           retention-days: 30
 
       - name: Upload build reports (on failure)

@@ -23,11 +23,10 @@ android {
                 cppFlags += listOf("-std=c++17", "-fexceptions", "-frtti")
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
-                    // 引擎集成模式，三选一：
-                    //   BUILTIN — KataGo 源码直接编译进 .so（默认，性能最好）
-                    //   PROCESS — 子进程启动引擎可执行文件
+                    // 引擎集成模式：
+                    //   PROCESS — 子进程启动引擎可执行文件（推荐，katago 由 CI 编译到 assets）
                     //   DYLIB   — dlopen 加载引擎 .so
-                    "-DWEIQI_ENGINE_MODE=BUILTIN"
+                    "-DWEIQI_ENGINE_MODE=PROCESS"
                 )
             }
         }

@@ -1,19 +1,9 @@
 // jni_bridge.cpp
 // Kotlin NativeEngineBridge ↔ C++ GtpEngine 桥接实现。
 //
-// 支持三种集成模式（由 CMakeLists.txt 的 WEIQI_ENGINE_MODE 控制）：
-//   - BUILTIN : BuiltinKataGoEngine，KataGo 源码直接编译进 .so（默认）
+// 模式（由 CMakeLists.txt 的 WEIQI_ENGINE_MODE 控制）：
 //   - PROCESS : KataGoRealEngine / LeelazRealEngine，子进程 + GTP pipe
 //   - DYLIB   : DylibGtpEngine，dlopen 引擎 .so
-//
-// 实现的所有 native 方法（与 NativeEngineBridge.kt 一一对应）：
-//   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeCreateEngine
-//   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeDestroyEngine
-//   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeSendGtpCommand
-//   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeStartAnalysis
-//   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeStopAnalysis
-//   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeIsEngineAvailable
-//   Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeGetEngineVersion
 
 #include <jni.h>
 
@@ -25,9 +15,7 @@
 
 #include "gtp_engine.h"
 
-#if defined(WEIQI_BUILTIN_MODE)
-    #include "builtin_katago_engine.h"
-#elif defined(WEIQI_PROCESS_MODE)
+#if defined(WEIQI_PROCESS_MODE)
     #include "real_engines.h"
     #include <stdlib.h>
 #elif defined(WEIQI_DYLIB_MODE)
@@ -47,7 +35,6 @@ static JavaVM* g_jvm = nullptr;
 static jclass g_bridgeClass = nullptr;
 static jmethodID g_onAnalysisUpdateMethod = nullptr;
 
-// 返回当前线程的 JNIEnv；若线程未 attached 则临时 attach，用毕 detach。
 class ScopedJniEnv {
 public:
     explicit ScopedJniEnv(JavaVM* vm) : vm_(vm), env_(nullptr), attached_(false) {
@@ -73,7 +60,6 @@ private:
     bool attached_;
 };
 
-// 反向调用 NativeEngineBridge.onAnalysisUpdate(callbackId, line)
 static void callOnAnalysisUpdate(int callbackId, const std::string& line) {
     if (g_jvm == nullptr || g_bridgeClass == nullptr || g_onAnalysisUpdateMethod == nullptr) {
         return;
@@ -91,7 +77,7 @@ static void callOnAnalysisUpdate(int callbackId, const std::string& line) {
 }
 
 // ============================================================================
-// 简易 JSON 解析（仅提取字符串字段）—— 用于从 configJson 中取关键字段
+// 简易 JSON 解析
 // ============================================================================
 
 static std::string jsonGetString(const std::string& json, const std::string& key) {
@@ -109,7 +95,6 @@ static std::string jsonGetString(const std::string& json, const std::string& key
             else end++;
         }
         std::string result = json.substr(pos, end - pos);
-        // 简易去转义
         std::string unescaped;
         for (size_t i = 0; i < result.size(); ++i) {
             if (result[i] == '\\' && i + 1 < result.size()) {
@@ -166,34 +151,12 @@ static bool jsonGetBool(const std::string& json, const std::string& key, bool de
 }
 
 // ============================================================================
-// 引擎工厂：根据编译模式返回真实引擎或桩实现
+// 引擎工厂
 // ============================================================================
 
 static std::unique_ptr<weiqi::GtpEngine> createEngineInstance(int engineType,
                                                               const std::string& configJson) {
-    // === BUILTIN 模式：KataGo 源码内置编译 ===
-#if defined(WEIQI_BUILTIN_MODE)
-    if (engineType == weiqi::kEngineKatago) {
-        weiqi::BuiltinKataGoEngine::Config cfg;
-        cfg.weightsPath = jsonGetString(configJson, "weightsPath");
-        cfg.configPath = jsonGetString(configJson, "configPath");
-        cfg.threads = jsonGetInt(configJson, "threads", 2);
-        cfg.maxVisits = jsonGetInt(configJson, "maxVisits", 800);
-        cfg.komi = jsonGetDouble(configJson, "komi", 7.5);
-        cfg.boardSize = jsonGetInt(configJson, "boardSize", 19);
-        cfg.cpuOnly = jsonGetBool(configJson, "cpuOnly", true);
-        cfg.enablePonder = jsonGetBool(configJson, "enablePonder", false);
-        cfg.nnCacheSizePowerOfTwo = jsonGetInt(configJson, "nnCacheSizePowerOfTwo", 17);
-        return std::make_unique<weiqi::BuiltinKataGoEngine>(cfg);
-    }
-    // LeelaZero 不支持 BUILTIN 模式
-    if (engineType == weiqi::kEngineLeelazero) {
-        return nullptr;
-    }
-    return nullptr;
-
-    // === PROCESS 模式：子进程 + GTP pipe ===
-#elif defined(WEIQI_PROCESS_MODE)
+#if defined(WEIQI_PROCESS_MODE)
     std::string weightsPath = jsonGetString(configJson, "weightsPath");
     std::string configPath = jsonGetString(configJson, "configPath");
     int threads = jsonGetInt(configJson, "threads", 2);
@@ -202,9 +165,6 @@ static std::unique_ptr<weiqi::GtpEngine> createEngineInstance(int engineType,
     bool cpuOnly = jsonGetBool(configJson, "cpuOnly", true);
     std::string workingDir = jsonGetString(configJson, "workingDir");
 
-    // 可执行文件路径：
-    //   - 优先使用 json 中的 executablePath
-    //   - 否则按 workingDir + "katago"/"leelaz" 推断
     std::string execPath = jsonGetString(configJson, "executablePath");
     if (execPath.empty()) {
         std::string name = (engineType == weiqi::kEngineKatago) ? "katago" : "leelaz";
@@ -212,17 +172,13 @@ static std::unique_ptr<weiqi::GtpEngine> createEngineInstance(int engineType,
     }
 
     if (engineType == weiqi::kEngineKatago) {
-        auto engine = std::make_unique<weiqi::KataGoRealEngine>(
+        return std::make_unique<weiqi::KataGoRealEngine>(
             weightsPath, configPath, threads, cpuOnly, komi, boardSize, workingDir, execPath);
-        return engine;
     } else if (engineType == weiqi::kEngineLeelazero) {
-        auto engine = std::make_unique<weiqi::LeelazRealEngine>(
+        return std::make_unique<weiqi::LeelazRealEngine>(
             weightsPath, threads, cpuOnly, komi, boardSize, workingDir, execPath);
-        return engine;
     }
-    return nullptr;
 
-    // === DYLIB 模式：dlopen 动态库 ===
 #elif defined(WEIQI_DYLIB_MODE)
     std::string libPath;
     if (engineType == weiqi::kEngineKatago) {
@@ -235,22 +191,17 @@ static std::unique_ptr<weiqi::GtpEngine> createEngineInstance(int engineType,
         return nullptr;
     }
     return std::make_unique<weiqi::DylibGtpEngine>(engineType, libPath, configJson);
-
-    // 未知模式：返回空
-#else
-    (void)configJson;
-    (void)engineType;
-    return nullptr;
 #endif
+
+    return nullptr;
 }
 
-// handle ↔ GtpEngine* 转换辅助
 static inline weiqi::GtpEngine* handleToEngine(jlong handle) {
     return reinterpret_cast<weiqi::GtpEngine*>(handle);
 }
 
 // ============================================================================
-// JNI_OnLoad：缓存 JavaVM、类引用、方法 ID
+// JNI_OnLoad
 // ============================================================================
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
@@ -287,7 +238,6 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/) {
 
 extern "C" {
 
-// 创建引擎实例，返回 handle（GtpEngine* 转 jlong）；失败返回 0
 JNIEXPORT jlong JNICALL
 Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeCreateEngine(
     JNIEnv* env, jclass /*clazz*/, jint engineType, jstring configJson) {
@@ -303,18 +253,17 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeCreateEngine(
 
     auto engine = createEngineInstance(static_cast<int>(engineType), config);
     if (!engine) {
-        LOGE("createEngine: failed to create engine instance (type=%d)", (int)engineType);
+        LOGE("createEngine: failed (type=%d)", (int)engineType);
         return 0;
     }
     if (!engine->start()) {
-        LOGE("createEngine: engine.start() failed (type=%d)", (int)engineType);
+        LOGE("createEngine: start() failed (type=%d)", (int)engineType);
         return 0;
     }
-    LOGI("createEngine: engine started (type=%d, name=%s)", (int)engineType, engine->name().c_str());
+    LOGI("createEngine: started (type=%d, name=%s)", (int)engineType, engine->name().c_str());
     return reinterpret_cast<jlong>(engine.release());
 }
 
-// 销毁引擎实例
 JNIEXPORT void JNICALL
 Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeDestroyEngine(
     JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
@@ -326,7 +275,6 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeDestroyEngine(
     }
 }
 
-// 发送 GTP 命令，返回响应正文；失败返回 "error: <msg>"
 JNIEXPORT jstring JNICALL
 Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeSendGtpCommand(
     JNIEnv* env, jclass /*clazz*/, jlong handle, jstring command) {
@@ -350,13 +298,11 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeSendGtpCommand(
     std::string errorMessage;
     std::string response = engine->sendCommand(cmd, errorMessage);
     if (!errorMessage.empty()) {
-        std::string err = "error: " + errorMessage;
-        return env->NewStringUTF(err.c_str());
+        return env->NewStringUTF(("error: " + errorMessage).c_str());
     }
     return env->NewStringUTF(response.c_str());
 }
 
-// 启动流式分析
 JNIEXPORT void JNICALL
 Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeStartAnalysis(
     JNIEnv* env, jclass /*clazz*/, jlong handle, jstring command, jint callbackId) {
@@ -379,7 +325,6 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeStartAnalysis(
     });
 }
 
-// 停止流式分析
 JNIEXPORT void JNICALL
 Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeStopAnalysis(
     JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
@@ -390,7 +335,6 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeStopAnalysis(
     }
 }
 
-// 检查引擎类型是否可用
 JNIEXPORT jboolean JNICALL
 Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeIsEngineAvailable(
     JNIEnv* /*env*/, jclass /*clazz*/, jint engineType) {
@@ -399,18 +343,9 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeIsEngineAvailable(
         return JNI_FALSE;
     }
 
-#if defined(WEIQI_BUILTIN_MODE)
-    // BUILTIN 模式：KataGo 始终可用（编译进 .so 了），LeelaZero 不可用
-    if (engineType == weiqi::kEngineKatago) {
-        return JNI_TRUE;
-    }
-    return JNI_FALSE;
-#elif defined(WEIQI_PROCESS_MODE)
-    // PROCESS 模式：理论上总是可用（只要有可执行文件）
-    // 这里返回 true，实际可用性由 start() 决定
+#if defined(WEIQI_PROCESS_MODE)
     return JNI_TRUE;
 #elif defined(WEIQI_DYLIB_MODE)
-    // DYLIB 模式：尝试 dlopen 看能否加载
     const char* libName = (engineType == weiqi::kEngineKatago) ? "libkatago.so" : "libleelaz.so";
     void* handle = dlopen(libName, RTLD_NOW | RTLD_LOCAL);
     if (handle) {
@@ -419,19 +354,15 @@ Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeIsEngineAvailable(
     }
     return JNI_FALSE;
 #else
-    // 未知模式：不可用
     return JNI_FALSE;
 #endif
 }
 
-// 获取引擎版本字符串
 JNIEXPORT jstring JNICALL
 Java_com_weiqi_app_engine_jni_NativeEngineBridge_nativeGetEngineVersion(
     JNIEnv* env, jclass /*clazz*/, jint engineType) {
     auto engine = createEngineInstance(static_cast<int>(engineType), "");
     std::string ver = engine ? engine->version() : "unknown";
-    // 如果只是查询版本而不实际启动，STUB 模式没问题；
-    // PROCESS/DYLIB 模式不应该调这个方法来探测（应该用 isEngineAvailable）
     return env->NewStringUTF(ver.c_str());
 }
 
