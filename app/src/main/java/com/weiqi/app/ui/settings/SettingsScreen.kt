@@ -31,7 +31,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -52,10 +51,8 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.weiqi.app.engine.DownloadStatus
 import com.weiqi.app.engine.EngineConfig
 import com.weiqi.app.engine.EngineType
-import com.weiqi.app.engine.WeightInfo
 import com.weiqi.app.ui.theme.BoardTheme
 import com.weiqi.app.ui.theme.StoneTheme
 import java.io.File
@@ -75,46 +72,31 @@ fun SettingsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     // ===== 文件选择器 launcher =====
-    // 使用 OpenDocument 以便跨 Android 版本兼容
+    // 使用 OpenDocument，接受任意文件类型，用户可选择任意权重/引擎文件。
+    // 选中后由 ViewModel 通过 ContentResolver 复制到 app 私有目录，确保引擎可读。
 
-    // KataGo 权重文件选择器 (.bin.gz / .txt.gz)
     val katagoWeightsPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let {
-            val path = SettingsViewModel.resolveFilePath(it)
-            viewModel.onKataGoWeightsFileSelected(it, path)
-        }
+        uri?.let { viewModel.onKataGoWeightsFileSelected(it) }
     }
 
-    // KataGo 引擎二进制文件选择器
     val katagoBinaryPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let {
-            val path = SettingsViewModel.resolveFilePath(it)
-            viewModel.onKataGoBinaryFileSelected(it, path)
-        }
+        uri?.let { viewModel.onKataGoBinaryFileSelected(it) }
     }
 
-    // LeelaZero 权重文件选择器
     val leelaWeightsPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let {
-            val path = SettingsViewModel.resolveFilePath(it)
-            viewModel.onLeelaWeightsFileSelected(it, path)
-        }
+        uri?.let { viewModel.onLeelaWeightsFileSelected(it) }
     }
 
-    // LeelaZero 引擎二进制文件选择器
     val leelaBinaryPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        uri?.let {
-            val path = SettingsViewModel.resolveFilePath(it)
-            viewModel.onLeelaBinaryFileSelected(it, path)
-        }
+        uri?.let { viewModel.onLeelaBinaryFileSelected(it) }
     }
 
     LaunchedEffect(state.lastError) {
@@ -160,13 +142,11 @@ fun SettingsScreen(
                     config = state.katagoConfig,
                     weightsPath = state.katagoWeightsPath,
                     binaryPath = state.katagoBinaryPath,
-                    weightDownloadStates = state.weightDownloadStates,
                     onUpdate = viewModel::updateKataGoConfig,
                     onSelectWeights = { katagoWeightsPicker.launch(arrayOf("*/*")) },
                     onSelectBinary = { katagoBinaryPicker.launch(arrayOf("*/*")) },
                     onClearWeights = viewModel::clearKataGoWeightsPath,
-                    onClearBinary = viewModel::clearKataGoBinaryPath,
-                    onDownloadWeight = viewModel::downloadWeight
+                    onClearBinary = viewModel::clearKataGoBinaryPath
                 )
                 EngineType.LEELAZERO -> LeelaConfigSection(
                     config = state.leelaConfig,
@@ -256,23 +236,23 @@ private fun KataGoConfigSection(
     config: EngineConfig,
     weightsPath: String,
     binaryPath: String,
-    weightDownloadStates: Map<String, DownloadStatus>,
     onUpdate: (EngineConfig) -> Unit,
     onSelectWeights: () -> Unit,
     onSelectBinary: () -> Unit,
     onClearWeights: () -> Unit,
-    onClearBinary: () -> Unit,
-    onDownloadWeight: (WeightInfo) -> Unit
+    onClearBinary: () -> Unit
 ) {
     ConfigCard("KataGo 参数") {
-        // --- 权重文件选择 ---
+        // --- 权重文件选择（支持任意 .bin.gz 权重文件，不限档位） ---
         FilePathRow(
-            label = "权重文件",
-            description = "从 katagotraining.org 下载 .bin.gz 权重",
+            label = "权重文件（可任选任意文件）",
+            description = "支持任意 .bin.gz 权重文件，不限网络规格",
             path = weightsPath,
             onSelect = onSelectWeights,
             onClear = onClearWeights
         )
+
+        Spacer(Modifier.height(4.dp))
 
         // --- 引擎二进制文件选择 ---
         FilePathRow(
@@ -281,12 +261,6 @@ private fun KataGoConfigSection(
             path = binaryPath,
             onSelect = onSelectBinary,
             onClear = onClearBinary
-        )
-
-        // --- 下载权重 ---
-        WeightDownloadSection(
-            weightDownloadStates = weightDownloadStates,
-            onDownload = onDownloadWeight
         )
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -311,80 +285,6 @@ private fun KataGoConfigSection(
             checked = config.enablePonder,
             onChange = { onUpdate(config.copy(enablePonder = it)) }
         )
-    }
-}
-
-/**
- * 权重下载区域：显示三档下载按钮与进度。
- */
-@Composable
-private fun WeightDownloadSection(
-    weightDownloadStates: Map<String, DownloadStatus>,
-    onDownload: (WeightInfo) -> Unit
-) {
-    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("下载 KataGo 权重", style = MaterialTheme.typography.bodyMedium)
-
-        WeightInfo.ALL.forEach { weight ->
-            val status = weightDownloadStates[weight.key] ?: DownloadStatus.NotFound
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // 信息
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(weight.label, style = MaterialTheme.typography.labelLarge)
-                    Text(
-                        "${weight.description} | ${weight.sizeMB}MB",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                // 按钮 / 状态
-                when (status) {
-                    is DownloadStatus.Completed -> {
-                        Text("已下载", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
-                    }
-                    is DownloadStatus.Downloading -> {
-                        OutlinedButton(
-                            onClick = {},
-                            enabled = false,
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Text("${status.progressPercent}%", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                    is DownloadStatus.Pending -> {
-                        OutlinedButton(
-                            onClick = {},
-                            enabled = false,
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Text("等待中", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                    else -> {
-                        OutlinedButton(
-                            onClick = { onDownload(weight) },
-                            modifier = Modifier.height(32.dp)
-                        ) {
-                            Text("下载 (${weight.sizeMB}MB)", style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
-
-            // 下载进度条
-            if (status is DownloadStatus.Downloading || status is DownloadStatus.Pending) {
-                LinearProgressIndicator(
-                    progress = { status.progressPercent / 100f },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        }
     }
 }
 
