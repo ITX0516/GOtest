@@ -68,7 +68,8 @@ private:
     // 子进程与管道
     pid_t childPid_ = -1;
     int stdinFd_ = -1;   // 写端：本进程 → 子进程
-    int stdoutFd_ = -1;  // 读端：子进程 → 本进程
+    int stdoutFd_ = -1;  // 读端：子进程 stdout → 本进程
+    int stderrFd_ = -1;  // 读端：子进程 stderr → 本进程
 
     // 同步命令互斥
     mutable std::mutex commandMutex_;
@@ -94,6 +95,8 @@ private:
 
     // 读取线程主循环
     void readLoop();
+    // drain stderr（非阻塞，读到没数据为止），每行打日志
+    void drainStderr(std::string& lineBuf);
 
     // 处理一行 GTP 响应（根据当前模式分发给同步等待或分析回调）
     void handleResponseLine(const std::string& line);

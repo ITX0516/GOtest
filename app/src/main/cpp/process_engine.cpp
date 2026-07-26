@@ -94,9 +94,18 @@ bool ProcessGtpEngine::start() {
         int status = 0;
         pid_t result = waitpid(childPid_, &status, WNOHANG);
         if (result != 0) {
-            // 子进程已退出
-            running_.store(false);
-            childPid_ = -1;
+            // 子进程已退出 —— drain stderr 拿到具体报错，再 shutdown 清理
+            std::string stderrOutput;
+            if (stderrFd_ >= 0) {
+                char buf[4096];
+                while (true) {
+                    ssize_t n = read(stderrFd_, buf, sizeof(buf) - 1);
+                    if (n <= 0) break;
+                    buf[n] = '\0';
+                    stderrOutput += buf;
+                }
+            }
+
             if (WIFEXITED(status)) {
                 lastError_ = "引擎启动后立即退出 (exit code=" +
                              std::to_string(WEXITSTATUS(status)) + ")";
@@ -104,8 +113,16 @@ bool ProcessGtpEngine::start() {
                 lastError_ = "引擎被信号终止 (signal=" +
                              std::to_string(WTERMSIG(status)) + ")";
             }
-            weiqi::log::e("weiqi_engine", "子进程启动后立即崩溃: " + lastError_ +
-                          "（常见原因：权重文件路径错/缺失、配置文件错误、ABI 不匹配、缺少动态库）");
+            weiqi::log::e("weiqi_engine", "子进程启动后立即崩溃: " + lastError_);
+            if (!stderrOutput.empty()) {
+                weiqi::log::e("weiqi_engine", "=== 子进程 stderr 输出 ===\n" + stderrOutput);
+                lastError_ += "\nstderr: " + stderrOutput;
+            } else {
+                weiqi::log::e("weiqi_engine", "(子进程 stderr 无输出)");
+            }
+
+            // 正确清理资源（join 读线程、关 fd、收尸），防止析构时 terminate
+            shutdown();
             return false;
         }
         weiqi::log::i("weiqi_engine", "子进程存活，开始查询版本");
@@ -120,7 +137,7 @@ bool ProcessGtpEngine::start() {
 }
 
 void ProcessGtpEngine::shutdown() {
-    if (!running_.load()) return;
+    running_.store(false);
 
     stopAnalysis();
 
@@ -130,8 +147,6 @@ void ProcessGtpEngine::shutdown() {
         write(stdinFd_, quit, strlen(quit));
         fsync(stdinFd_);
     }
-
-    running_.store(false);
 
     // 关闭写端，让子进程自然退出
     if (stdinFd_ >= 0) {
@@ -148,6 +163,10 @@ void ProcessGtpEngine::shutdown() {
     if (stdoutFd_ >= 0) {
         close(stdoutFd_);
         stdoutFd_ = -1;
+    }
+    if (stderrFd_ >= 0) {
+        close(stderrFd_);
+        stderrFd_ = -1;
     }
 
     // 等子进程退出，必要时 SIGKILL
@@ -176,9 +195,11 @@ bool ProcessGtpEngine::isReady() const {
 bool ProcessGtpEngine::spawnProcess() {
     int stdinPipe[2];   // [0]=读(子进程), [1]=写(父)
     int stdoutPipe[2];  // [0]=读(父), [1]=写(子进程)
+    int stderrPipe[2];  // [0]=读(父), [1]=写(子进程)
     int execErrPipe[2]; // 用于检测 execvp 是否失败
 
-    if (pipe(stdinPipe) != 0 || pipe(stdoutPipe) != 0 || pipe(execErrPipe) != 0) {
+    if (pipe(stdinPipe) != 0 || pipe(stdoutPipe) != 0 ||
+        pipe(stderrPipe) != 0 || pipe(execErrPipe) != 0) {
         LOGE("pipe() failed: %s", strerror(errno));
         return false;
     }
@@ -192,6 +213,7 @@ bool ProcessGtpEngine::spawnProcess() {
         LOGE("fork() failed: %s", strerror(errno));
         close(stdinPipe[0]); close(stdinPipe[1]);
         close(stdoutPipe[0]); close(stdoutPipe[1]);
+        close(stderrPipe[0]); close(stderrPipe[1]);
         close(execErrPipe[0]); close(execErrPipe[1]);
         return false;
     }
@@ -201,11 +223,12 @@ bool ProcessGtpEngine::spawnProcess() {
         // 重定向 stdin / stdout / stderr
         dup2(stdinPipe[0], STDIN_FILENO);
         dup2(stdoutPipe[1], STDOUT_FILENO);
-        dup2(stdoutPipe[1], STDERR_FILENO);
+        dup2(stderrPipe[1], STDERR_FILENO);
 
         // 关闭不需要的 pipe 端
         close(stdinPipe[0]); close(stdinPipe[1]);
         close(stdoutPipe[0]); close(stdoutPipe[1]);
+        close(stderrPipe[0]); close(stderrPipe[1]);
         // execErrPipe[0] 已在父进程关闭，execErrPipe[1] 设了 CLOEXEC
 
         // 切换工作目录
@@ -236,10 +259,12 @@ bool ProcessGtpEngine::spawnProcess() {
     childPid_ = pid;
     stdinFd_ = stdinPipe[1];   // 父进程写
     stdoutFd_ = stdoutPipe[0]; // 父进程读
+    stderrFd_ = stderrPipe[0]; // 父进程读 stderr
 
     // 关闭子进程端
     close(stdinPipe[0]);
     close(stdoutPipe[1]);
+    close(stderrPipe[1]);
     close(execErrPipe[1]);
 
     // 检测 execvp 是否成功：读 execErrPipe[0]
@@ -259,6 +284,7 @@ bool ProcessGtpEngine::spawnProcess() {
         childPid_ = -1;
         stdinFd_ = -1;
         stdoutFd_ = -1;
+        stderrFd_ = -1;
         lastError_ = std::string("无法启动引擎: ") + strerror(execErrno) +
                      " (路径: " + executablePath_ + ")";
         return false;
@@ -267,6 +293,8 @@ bool ProcessGtpEngine::spawnProcess() {
     // 设置为非阻塞读，避免读取线程卡死
     int flags = fcntl(stdoutFd_, F_GETFL, 0);
     fcntl(stdoutFd_, F_SETFL, flags | O_NONBLOCK);
+    flags = fcntl(stderrFd_, F_GETFL, 0);
+    fcntl(stderrFd_, F_SETFL, flags | O_NONBLOCK);
 
     weiqi::log::i("weiqi_engine", "spawned engine pid=" + std::to_string(pid) +
                   " exec=" + executablePath_);
@@ -368,6 +396,7 @@ void ProcessGtpEngine::stopAnalysis() {
 
 void ProcessGtpEngine::readLoop() {
     std::string lineBuffer;
+    std::string stderrBuffer;
     char buf[4096];
 
     while (running_.load()) {
@@ -376,7 +405,8 @@ void ProcessGtpEngine::readLoop() {
         ssize_t n = read(stdoutFd_, buf, sizeof(buf) - 1);
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // 非阻塞，等一会儿再读
+                // 非阻塞，顺便 drain 一下 stderr，再等一会儿再读
+                drainStderr(stderrBuffer);
                 std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 continue;
             }
@@ -410,6 +440,35 @@ void ProcessGtpEngine::readLoop() {
                 }
             } else {
                 lineBuffer.push_back(c);
+            }
+        }
+
+        // 每次读完 stdout 顺手 drain stderr
+        drainStderr(stderrBuffer);
+    }
+
+    // 退出前最后 drain 一次 stderr
+    drainStderr(stderrBuffer);
+    if (!stderrBuffer.empty()) {
+        weiqi::log::e("weiqi_engine", "stderr 末尾: " + stderrBuffer);
+    }
+}
+
+void ProcessGtpEngine::drainStderr(std::string& lineBuf) {
+    if (stderrFd_ < 0) return;
+    char buf[1024];
+    while (true) {
+        ssize_t n = read(stderrFd_, buf, sizeof(buf) - 1);
+        if (n <= 0) break;
+        buf[n] = '\0';
+        // 按行输出到日志
+        for (ssize_t i = 0; i < n; ++i) {
+            char c = buf[i];
+            if (c == '\n') {
+                weiqi::log::e("weiqi_engine", "stderr: " + lineBuf);
+                lineBuf.clear();
+            } else if (c != '\r') {
+                lineBuf.push_back(c);
             }
         }
     }
