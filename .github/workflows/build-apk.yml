@@ -102,6 +102,22 @@ jobs:
             echo "Eigen headers found at $EIGEN_DIR"
           fi
 
+      - name: Download KataGo default weight (b18c384)
+        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
+        run: |
+          # 下载 b18c384 权重作为开箱即用的默认值（用户也可在设置页自选任意权重）
+          WEIGHTS_DIR="app/src/main/assets/weights"
+          mkdir -p "$WEIGHTS_DIR"
+          WEIGHT_FILE="$WEIGHTS_DIR/katago_b18c384.bin.gz"
+          if [ ! -f "$WEIGHT_FILE" ] || [ ! -s "$WEIGHT_FILE" ]; then
+            echo "Downloading b18c384 weight (~93MB)..."
+            curl -fL -o "$WEIGHT_FILE" \
+              "https://media.katagotraining.org/uploaded/networks/models/kata1/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz"
+            ls -lh "$WEIGHT_FILE"
+          else
+            echo "Weight file already exists: $(ls -lh $WEIGHT_FILE)"
+          fi
+
       - name: Build katago binary (arm64-v8a, armeabi-v7a)
         if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
         run: |

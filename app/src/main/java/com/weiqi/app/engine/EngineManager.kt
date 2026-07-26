@@ -257,6 +257,10 @@ class EngineManager(
                 val weightsPath = preferences.resolveKataGoWeightsPath()
                 // 二进制路径优先级：ensureBinaryExtracted > 用户自定义 > 公共目录扫描
                 val binaryPath = extractedBinary.ifBlank { preferences.resolveKataGoBinaryPath() }
+                // 预检查：权重与二进制必须存在，否则给出明确错误（避免 native crash 闪退）
+                requireFile(weightsPath, "KataGo 权重文件", "请在设置页选择 .bin.gz 权重文件")
+                requireExecutable(binaryPath, "KataGo 引擎二进制",
+                    "未找到 katago 二进制。请在设置页选择引擎二进制文件（可从阿Q围棋等 app 提取 libkatago.so）")
                 val configPath = preferences.getKataGoConfigPath().ifBlank {
                     try { ensureConfigExtracted(EnginePreferences.ASSET_KATAGO_CONFIG) } catch (_: Exception) { "" }
                 }.ifBlank { ensureDefaultKatagoConfig() }
@@ -274,6 +278,10 @@ class EngineManager(
                 val extractedBinary = ensureBinaryExtracted(type)
                 val weightsPath = preferences.resolveLeelaWeightsPath()
                 val binaryPath = extractedBinary.ifBlank { preferences.resolveLeelaBinaryPath() }
+                // 预检查：LeelaZero 二进制不会随 APK 打包，必须由用户提供
+                requireFile(weightsPath, "LeelaZero 权重文件", "请在设置页选择 .txt.gz 权重文件")
+                requireExecutable(binaryPath, "LeelaZero 引擎二进制",
+                    "未找到 leelaz 二进制。LeelaZero 不会随 APK 打包，请在设置页选择引擎二进制文件（可从阿Q围棋等 app 提取 libleelaz.so）")
                 val workingDir = appContext.filesDir.absolutePath
                 val cfg = preferences.getLeelaZeroConfig().copy(
                     weightsPath = weightsPath,
@@ -298,6 +306,34 @@ class EngineManager(
             throw EngineException("启动 ${type.displayName} 引擎失败：${e.message}", e)
         }
         return engine
+    }
+
+    /** 检查普通文件是否存在且可读；不存在抛出带提示的 [EngineException]。 */
+    private fun requireFile(path: String, label: String, hint: String) {
+        if (path.isBlank()) {
+            throw EngineException("$label 未设置。$hint")
+        }
+        val f = File(path)
+        if (!f.exists() || !f.canRead()) {
+            throw EngineException("$label 不存在或不可读：$path。$hint")
+        }
+        if (f.length() == 0L) {
+            throw EngineException("$label 为空文件：$path。$hint")
+        }
+    }
+
+    /** 检查可执行文件是否存在且可执行；不存在抛出带提示的 [EngineException]。 */
+    private fun requireExecutable(path: String, label: String, hint: String) {
+        if (path.isBlank()) {
+            throw EngineException("$label 未设置。$hint")
+        }
+        val f = File(path)
+        if (!f.exists()) {
+            throw EngineException("$label 不存在：$path。$hint")
+        }
+        if (!f.canExecute()) {
+            throw EngineException("$label 不可执行：$path。$hint")
+        }
     }
 
     private suspend fun stopInternal(engine: GoEngine) {
