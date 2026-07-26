@@ -42,7 +42,6 @@ using ::BoardHistory;
 using ::Player;
 using ::Rules;
 using ::Loc;
-using ::Location;
 using ::enabled_t;
 using ::C_BLACK;
 using ::C_WHITE;
