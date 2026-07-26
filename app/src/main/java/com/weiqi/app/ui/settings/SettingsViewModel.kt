@@ -1,12 +1,16 @@
 package com.weiqi.app.ui.settings
 
+import android.app.Application
 import android.net.Uri
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.weiqi.app.engine.DownloadStatus
 import com.weiqi.app.engine.EngineConfig
 import com.weiqi.app.engine.EngineManager
 import com.weiqi.app.engine.EnginePreferences
 import com.weiqi.app.engine.EngineType
+import com.weiqi.app.engine.WeightDownloadManager
+import com.weiqi.app.engine.WeightInfo
 import com.weiqi.app.ui.theme.BoardTheme
 import com.weiqi.app.ui.theme.StoneTheme
 import com.weiqi.app.ui.theme.ThemePreferences
@@ -18,24 +22,18 @@ import java.io.File
 
 /**
  * 设置页 ViewModel。
- *
- * 持有：
- * - 引擎选择与各引擎参数
- * - 用户自定义权重/引擎二进制路径
- * - 远程算力平台配置
- * - 主题（棋盘 / 棋子 / 音效）
- *
- * 修改后立即持久化到 [EnginePreferences] / [ThemePreferences]，
- * 当前运行的引擎若被修改可调用 [restartEngine] 重启以应用新配置。
  */
 class SettingsViewModel(
+    application: Application,
     private val engineManager: EngineManager,
     private val themePreferences: ThemePreferences,
     private val enginePreferences: EnginePreferences
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
     private val _settingsState = MutableStateFlow(buildInitialState())
     val settingsState: StateFlow<SettingsUiState> = _settingsState.asStateFlow()
+
+    private val downloadManager = WeightDownloadManager(application)
 
     /** 设备是否支持内置引擎（ABI / 内存检查）。 */
     val deviceSupported: StateFlow<Map<EngineType, Boolean>> = MutableStateFlow(
@@ -63,7 +61,6 @@ class SettingsViewModel(
         )
     }
 
-    /** 刷新路径状态（用户可能通过文件管理器移走了文件）。 */
     fun refreshPaths() {
         _settingsState.value = _settingsState.value.copy(
             katagoWeightsPath = enginePreferences.getKataGoWeightsPath(),
@@ -89,6 +86,52 @@ class SettingsViewModel(
                 _settingsState.value = _settingsState.value.copy(soundEnabled = enabled)
             }
         }
+        // 监听下载完成
+        viewModelScope.launch {
+            downloadManager.downloadCompleteFlow().collect { downloadId ->
+                refreshDownloadStates()
+                // 自动刷新权重路径，让下载完成的文件能被识别
+                refreshPaths()
+            }
+        }
+        // 初始查询已有下载状态
+        viewModelScope.launch { refreshDownloadStates() }
+    }
+
+    // ===== 权重下载 =====
+
+    /** 开始下载指定权重。 */
+    fun downloadWeight(weight: WeightInfo) {
+        val id = downloadManager.startDownload(weight)
+        _settingsState.value = _settingsState.value.copy(
+            downloadingWeightKey = weight.key
+        )
+        viewModelScope.launch { refreshDownloadStates() }
+    }
+
+    /** 刷新所有权重的下载状态，下载完成时自动关联到 katagoWeightsPath。 */
+    fun refreshDownloadStates() {
+        val states = WeightInfo.ALL.associate { weight ->
+            val lastId = downloadManager.getLastDownloadId(weight.key)
+            val status = if (lastId >= 0) downloadManager.queryStatus(lastId) else DownloadStatus.NotFound
+            // 下载完成后，自动将路径关联到当前文件的预期位置
+            if (status is DownloadStatus.Completed) {
+                val downloadedFile = File(
+                    android.os.Environment.getExternalStoragePublicDirectory(
+                        android.os.Environment.DIRECTORY_DOWNLOADS
+                    ),
+                    weight.fileName
+                )
+                if (downloadedFile.exists() && enginePreferences.getKataGoWeightsPath().isBlank()) {
+                    enginePreferences.setKataGoWeightsPath(downloadedFile.absolutePath)
+                    _settingsState.value = _settingsState.value.copy(
+                        katagoWeightsPath = downloadedFile.absolutePath
+                    )
+                }
+            }
+            weight.key to status
+        }
+        _settingsState.value = _settingsState.value.copy(weightDownloadStates = states)
     }
 
     fun setCurrentEngine(type: EngineType) {
@@ -116,49 +159,41 @@ class SettingsViewModel(
 
     // ===== 文件选择回调 =====
 
-    /** 处理用户选择的 KataGo 权重文件 URI。 */
     fun onKataGoWeightsFileSelected(uri: Uri, path: String) {
         enginePreferences.setKataGoWeightsPath(path)
         _settingsState.value = _settingsState.value.copy(katagoWeightsPath = path)
     }
 
-    /** 处理用户选择的 KataGo 引擎二进制文件 URI。 */
     fun onKataGoBinaryFileSelected(uri: Uri, path: String) {
         enginePreferences.setKataGoBinaryPath(path)
         _settingsState.value = _settingsState.value.copy(katagoBinaryPath = path)
     }
 
-    /** 处理用户选择的 LeelaZero 权重文件 URI。 */
     fun onLeelaWeightsFileSelected(uri: Uri, path: String) {
         enginePreferences.setLeelaWeightsPath(path)
         _settingsState.value = _settingsState.value.copy(leelaWeightsPath = path)
     }
 
-    /** 处理用户选择的 LeelaZero 引擎二进制文件 URI。 */
     fun onLeelaBinaryFileSelected(uri: Uri, path: String) {
         enginePreferences.setLeelaBinaryPath(path)
         _settingsState.value = _settingsState.value.copy(leelaBinaryPath = path)
     }
 
-    /** 清除 KataGo 权重路径。 */
     fun clearKataGoWeightsPath() {
         enginePreferences.setKataGoWeightsPath("")
         _settingsState.value = _settingsState.value.copy(katagoWeightsPath = "")
     }
 
-    /** 清除 KataGo 二进制路径。 */
     fun clearKataGoBinaryPath() {
         enginePreferences.setKataGoBinaryPath("")
         _settingsState.value = _settingsState.value.copy(katagoBinaryPath = "")
     }
 
-    /** 清除 LeelaZero 权重路径。 */
     fun clearLeelaWeightsPath() {
         enginePreferences.setLeelaWeightsPath("")
         _settingsState.value = _settingsState.value.copy(leelaWeightsPath = "")
     }
 
-    /** 清除 LeelaZero 二进制路径。 */
     fun clearLeelaBinaryPath() {
         enginePreferences.setLeelaBinaryPath("")
         _settingsState.value = _settingsState.value.copy(leelaBinaryPath = "")
@@ -176,7 +211,6 @@ class SettingsViewModel(
         viewModelScope.launch { themePreferences.setSoundEnabled(enabled) }
     }
 
-    /** 切换当前引擎并启动；返回失败信息到 [SettingsUiState.lastError]。 */
     fun restartEngine() {
         viewModelScope.launch {
             try {
@@ -206,18 +240,11 @@ class SettingsViewModel(
     }
 
     companion object {
-        /**
-         * 从 content URI 解析出实际文件路径（用于 SAF 文件选择器回调）。
-         * 如果无法解析，回退到 URI 的路径部分。
-         */
         fun resolveFilePath(uri: Uri): String {
-            // 常见：file:/// 前缀的 URI 直接返回路径
             if (uri.scheme == "file") {
                 return uri.path ?: ""
             }
-            // content:// URI — 尝试解析为实际路径
             val path = uri.path ?: ""
-            // 常见 content URI 格式: content://.../document/primary:Download/katago.bin.gz
             val primaryIdx = path.indexOf("/primary:")
             if (primaryIdx >= 0) {
                 return "/sdcard/" + path.substring(primaryIdx + "/primary:".length)
@@ -240,6 +267,8 @@ data class SettingsUiState(
     val katagoBinaryPath: String = "",
     val leelaWeightsPath: String = "",
     val leelaBinaryPath: String = "",
+    val weightDownloadStates: Map<String, DownloadStatus> = emptyMap(),
+    val downloadingWeightKey: String? = null,
     val boardTheme: BoardTheme,
     val stoneTheme: StoneTheme,
     val soundEnabled: Boolean,

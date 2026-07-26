@@ -31,6 +31,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -51,8 +52,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.weiqi.app.engine.DownloadStatus
 import com.weiqi.app.engine.EngineConfig
 import com.weiqi.app.engine.EngineType
+import com.weiqi.app.engine.WeightInfo
 import com.weiqi.app.ui.theme.BoardTheme
 import com.weiqi.app.ui.theme.StoneTheme
 import java.io.File
@@ -157,11 +160,13 @@ fun SettingsScreen(
                     config = state.katagoConfig,
                     weightsPath = state.katagoWeightsPath,
                     binaryPath = state.katagoBinaryPath,
+                    weightDownloadStates = state.weightDownloadStates,
                     onUpdate = viewModel::updateKataGoConfig,
                     onSelectWeights = { katagoWeightsPicker.launch(arrayOf("*/*")) },
                     onSelectBinary = { katagoBinaryPicker.launch(arrayOf("*/*")) },
                     onClearWeights = viewModel::clearKataGoWeightsPath,
-                    onClearBinary = viewModel::clearKataGoBinaryPath
+                    onClearBinary = viewModel::clearKataGoBinaryPath,
+                    onDownloadWeight = viewModel::downloadWeight
                 )
                 EngineType.LEELAZERO -> LeelaConfigSection(
                     config = state.leelaConfig,
@@ -251,11 +256,13 @@ private fun KataGoConfigSection(
     config: EngineConfig,
     weightsPath: String,
     binaryPath: String,
+    weightDownloadStates: Map<String, DownloadStatus>,
     onUpdate: (EngineConfig) -> Unit,
     onSelectWeights: () -> Unit,
     onSelectBinary: () -> Unit,
     onClearWeights: () -> Unit,
-    onClearBinary: () -> Unit
+    onClearBinary: () -> Unit,
+    onDownloadWeight: (WeightInfo) -> Unit
 ) {
     ConfigCard("KataGo 参数") {
         // --- 权重文件选择 ---
@@ -274,6 +281,12 @@ private fun KataGoConfigSection(
             path = binaryPath,
             onSelect = onSelectBinary,
             onClear = onClearBinary
+        )
+
+        // --- 下载权重 ---
+        WeightDownloadSection(
+            weightDownloadStates = weightDownloadStates,
+            onDownload = onDownloadWeight
         )
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
@@ -298,6 +311,80 @@ private fun KataGoConfigSection(
             checked = config.enablePonder,
             onChange = { onUpdate(config.copy(enablePonder = it)) }
         )
+    }
+}
+
+/**
+ * 权重下载区域：显示三档下载按钮与进度。
+ */
+@Composable
+private fun WeightDownloadSection(
+    weightDownloadStates: Map<String, DownloadStatus>,
+    onDownload: (WeightInfo) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("下载 KataGo 权重", style = MaterialTheme.typography.bodyMedium)
+
+        WeightInfo.ALL.forEach { weight ->
+            val status = weightDownloadStates[weight.key] ?: DownloadStatus.NotFound
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // 信息
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(weight.label, style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "${weight.description} | ${weight.sizeMB}MB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // 按钮 / 状态
+                when (status) {
+                    is DownloadStatus.Completed -> {
+                        Text("已下载", color = Color(0xFF4CAF50), style = MaterialTheme.typography.labelSmall)
+                    }
+                    is DownloadStatus.Downloading -> {
+                        OutlinedButton(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text("${status.progressPercent}%", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    is DownloadStatus.Pending -> {
+                        OutlinedButton(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text("等待中", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    else -> {
+                        OutlinedButton(
+                            onClick = { onDownload(weight) },
+                            modifier = Modifier.height(32.dp)
+                        ) {
+                            Text("下载 (${weight.sizeMB}MB)", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+
+            // 下载进度条
+            if (status is DownloadStatus.Downloading || status is DownloadStatus.Pending) {
+                LinearProgressIndicator(
+                    progress = { status.progressPercent / 100f },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 }
 

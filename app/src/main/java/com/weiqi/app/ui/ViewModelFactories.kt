@@ -49,6 +49,7 @@ class SettingsViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return SettingsViewModel(
+            application = app,
             engineManager = app.engineManager,
             themePreferences = app.themePreferences,
             enginePreferences = app.enginePreferences
