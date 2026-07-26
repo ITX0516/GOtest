@@ -116,55 +116,33 @@ class EngineManager(
     }
 
     /**
-     * 确保引擎可执行文件就位并返回其路径。
+     * 返回引擎可执行文件路径（从 jniLibs 打包，位于 nativeLibraryDir）。
      *
-     * Android 10+ (API 29+) 的 W^X 策略禁止从 `filesDir` 执行二进制文件，
-     * 因此优先将二进制复制到 `nativeLibraryDir`（该目录允许执行）。
+     * Android 10+ 的 W^X 策略禁止从 `filesDir` 执行二进制，
+     * 因此引擎二进制通过 jniLibs 打包为 `lib*.so`，安装时由 PackageManager
+     * 解压到 `nativeLibraryDir`，这是唯一可靠的可执行目录。
      *
-     * 路径优先级：
-     * 1. jniLibs 中已打包的 `libkatago.so` / `libleelaz.so`（nativeLibraryDir，无需复制）
-     * 2. 从 assets 复制到 nativeLibraryDir（运行时复制）
-     * 3. 从 assets 复制到 filesDir/bin/（旧设备回退，Android 9 及以下可执行）
+     * LeelaZero 不随 APK 打包，此方法返回空字符串，用户需在设置页自选二进制。
      *
      * @param engineType 引擎类型（KATAGO / LEELAZERO）。
-     * @return 可执行文件绝对路径；无可用文件则返回空字符串。
+     * @return 可执行文件绝对路径；未打包则返回空字符串。
      */
-    suspend fun ensureBinaryExtracted(engineType: EngineType): String = withContext(Dispatchers.IO) {
-        if (engineType == EngineType.REMOTE) return@withContext ""
+    fun ensureBinaryExtracted(engineType: EngineType): String {
+        if (engineType == EngineType.REMOTE) return ""
 
-        val binaryName = when (engineType) {
-            EngineType.KATAGO -> "katago"
-            EngineType.LEELAZERO -> "leelaz"
-            EngineType.REMOTE -> return@withContext ""
+        val soName = when (engineType) {
+            EngineType.KATAGO -> "libkatago.so"
+            EngineType.LEELAZERO -> "libleelaz.so"
+            EngineType.REMOTE -> return ""
         }
 
-        // 1. 检查 nativeLibraryDir 中是否已有 jniLibs 打包的二进制
         val nativeDir = appContext.applicationInfo.nativeLibraryDir
-        val soName = "lib${binaryName}.so"
         val nativeFile = File(nativeDir, soName)
-        if (nativeFile.exists() && nativeFile.canExecute()) {
-            return@withContext nativeFile.absolutePath
+        return if (nativeFile.exists() && nativeFile.canExecute()) {
+            nativeFile.absolutePath
+        } else {
+            ""
         }
-
-        // 2. 从 assets 复制到 nativeLibraryDir
-        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
-        val assetName = "bin/$abi/$binaryName"
-        if (copyAssetToDir(assetName, nativeDir, soName)) {
-            val dest = File(nativeDir, soName)
-            dest.setExecutable(true, false)
-            return@withContext dest.absolutePath
-        }
-
-        // 3. 回退：复制到 filesDir/bin/（Android 9 及以下可执行）
-        val fallbackDir = File(appContext.filesDir, "bin")
-        if (!fallbackDir.exists()) fallbackDir.mkdirs()
-        val fallbackFile = File(fallbackDir, binaryName)
-        if (copyAssetToDir(assetName, fallbackDir.absolutePath, binaryName)) {
-            fallbackFile.setExecutable(true, false)
-            return@withContext fallbackFile.absolutePath
-        }
-
-        ""
     }
 
     /** 从 assets 复制单个文件到目标目录。已存在且大小相同则跳过。 */

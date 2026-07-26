@@ -102,23 +102,7 @@ jobs:
             echo "Eigen headers found at $EIGEN_DIR"
           fi
 
-      - name: Download KataGo default weight (b18c384)
-        if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
-        run: |
-          # 下载 b18c384 权重作为开箱即用的默认值（用户也可在设置页自选任意权重）
-          WEIGHTS_DIR="app/src/main/assets/weights"
-          mkdir -p "$WEIGHTS_DIR"
-          WEIGHT_FILE="$WEIGHTS_DIR/katago_b18c384.bin.gz"
-          if [ ! -f "$WEIGHT_FILE" ] || [ ! -s "$WEIGHT_FILE" ]; then
-            echo "Downloading b18c384 weight (~93MB)..."
-            curl -fL -o "$WEIGHT_FILE" \
-              "https://media.katagotraining.org/uploaded/networks/models/kata1/kata1-b18c384nbt-s9996604416-d4316597426.bin.gz"
-            ls -lh "$WEIGHT_FILE"
-          else
-            echo "Weight file already exists: $(ls -lh $WEIGHT_FILE)"
-          fi
-
-      - name: Build katago binary (arm64-v8a, armeabi-v7a)
+      - name: Build katago binary (arm64-v8a)
         if: ${{ (inputs.engine_mode || 'PROCESS') != 'DYLIB' }}
         run: |
           NDK_TOOLCHAIN="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake"
@@ -127,29 +111,36 @@ jobs:
           for f in core/sha2.cpp dataio/numpywrite.cpp neuralnet/desc.cpp; do
             sed -i '1s/^/#define BYTE_ORDER 1234\n#define LITTLE_ENDIAN 1234\n/' "$KATAGO_SRC/$f"
           done
-          for ABI in arm64-v8a armeabi-v7a; do
-            echo "=== Building katago for $ABI ==="
-            mkdir -p build-katago/$ABI
-            cd build-katago/$ABI
-            cmake "$GITHUB_WORKSPACE/$KATAGO_SRC" \
-              -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
-              -DANDROID_ABI=$ABI \
-              -DANDROID_PLATFORM=android-24 \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DUSE_CPU_ONLY=1 \
-              -DNO_GIT_REVISION=1 \
-              -DBUILD_TESTING=OFF
-            cmake --build . -j$(nproc) --target katago
-            # 拷贝到 jniLibs（命名为 libkatago.so，包管理器会自动解压到 nativeLibraryDir）
-            # nativeLibraryDir 是 Android 上唯一可靠的可执行目录（W^X 策略下 filesDir 不可执行）
-            mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI"
-            cp katago "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI/libkatago.so"
-            # 同时保留一份在 assets 作为备份
-            mkdir -p "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI"
-            cp katago "$GITHUB_WORKSPACE/app/src/main/assets/bin/$ABI/katago"
-            ls -lh "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI/libkatago.so"
-            cd "$GITHUB_WORKSPACE"
-          done
+          # 只编译 arm64-v8a（2025 年主流手机全部 64 位，32 位设备不足 5%）
+          ABI="arm64-v8a"
+          echo "=== Building katago for $ABI ==="
+          mkdir -p build-katago/$ABI
+          cd build-katago/$ABI
+          cmake "$GITHUB_WORKSPACE/$KATAGO_SRC" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK_TOOLCHAIN" \
+            -DANDROID_ABI=$ABI \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS_RELEASE="-Os -DNDEBUG" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-Os -DNDEBUG" \
+            -DUSE_CPU_ONLY=1 \
+            -DNO_GIT_REVISION=1 \
+            -DBUILD_TESTING=OFF
+          cmake --build . -j$(nproc) --target katago
+          # strip 剥离符号表，进一步减小体积
+          STRIP="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          if [ -f "$STRIP" ]; then
+            "$STRIP" katago
+            echo "Stripped binary size:"
+            ls -lh katago
+          fi
+          # 只放到 jniLibs（命名为 libkatago.so，包管理器会自动解压到 nativeLibraryDir）
+          # nativeLibraryDir 是 Android 上唯一可靠的可执行目录（W^X 策略下 filesDir 不可执行）
+          # 不再放 assets/bin/，避免重复打包
+          mkdir -p "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI"
+          cp katago "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI/libkatago.so"
+          ls -lh "$GITHUB_WORKSPACE/app/src/main/jniLibs/$ABI/libkatago.so"
+          cd "$GITHUB_WORKSPACE"
 
       - name: Set engine mode in build.gradle.kts
         run: |
