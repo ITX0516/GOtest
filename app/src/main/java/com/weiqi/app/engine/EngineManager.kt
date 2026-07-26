@@ -356,6 +356,7 @@ class EngineManager(
 logDir = .
 logDirGTP = .
 logToStdout = false
+logToStderr = true
 logAllGTPCommunication = false
 logSearchInfo = false
 # 搜索

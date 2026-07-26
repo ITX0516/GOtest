@@ -94,7 +94,17 @@ bool ProcessGtpEngine::start() {
         int status = 0;
         pid_t result = waitpid(childPid_, &status, WNOHANG);
         if (result != 0) {
-            // 子进程已退出 —— drain stderr 拿到具体报错，再 shutdown 清理
+            // 子进程已退出 —— drain stdout+stderr 拿到具体报错，再 shutdown 清理
+            std::string stdoutOutput;
+            if (stdoutFd_ >= 0) {
+                char buf[4096];
+                while (true) {
+                    ssize_t n = read(stdoutFd_, buf, sizeof(buf) - 1);
+                    if (n <= 0) break;
+                    buf[n] = '\0';
+                    stdoutOutput += buf;
+                }
+            }
             std::string stderrOutput;
             if (stderrFd_ >= 0) {
                 char buf[4096];
@@ -114,6 +124,12 @@ bool ProcessGtpEngine::start() {
                              std::to_string(WTERMSIG(status)) + ")";
             }
             weiqi::log::e("weiqi_engine", "子进程启动后立即崩溃: " + lastError_);
+            if (!stdoutOutput.empty()) {
+                weiqi::log::e("weiqi_engine", "=== 子进程 stdout 输出 ===\n" + stdoutOutput);
+                lastError_ += "\nstdout: " + stdoutOutput;
+            } else {
+                weiqi::log::e("weiqi_engine", "(子进程 stdout 无输出)");
+            }
             if (!stderrOutput.empty()) {
                 weiqi::log::e("weiqi_engine", "=== 子进程 stderr 输出 ===\n" + stderrOutput);
                 lastError_ += "\nstderr: " + stderrOutput;
@@ -154,9 +170,17 @@ void ProcessGtpEngine::shutdown() {
         stdinFd_ = -1;
     }
 
-    // 等待读取线程退出
+    // 等待读取线程退出（try/catch 兜底，绝不让 terminate）
     if (readThread_.joinable()) {
-        readThread_.join();
+        try {
+            readThread_.join();
+        } catch (const std::exception& e) {
+            weiqi::log::e("weiqi_engine", std::string("readThread join 异常: ") + e.what());
+            try { readThread_.detach(); } catch (...) {}
+        } catch (...) {
+            weiqi::log::e("weiqi_engine", "readThread join 未知异常，执行 detach");
+            try { readThread_.detach(); } catch (...) {}
+        }
     }
 
     // 关闭读端
